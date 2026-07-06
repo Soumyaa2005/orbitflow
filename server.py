@@ -80,10 +80,32 @@ WI_FIRST_DATA_ROW = 6
 # workbook + header-detection helpers
 # ---------------------------------------------------------------------------
 
+_wb_cache = {"wb": None, "mtime": None}
+
+
 def load_wb():
+    """Cache the parsed workbook in memory per-process, keyed on the file's
+    mtime. openpyxl's load_workbook() re-parses every sheet/style/formula
+    from scratch, which is the main cost on a slow/shared-CPU host -- this
+    avoids paying that cost on every single GET request. Any write goes
+    through save_wb() below, which keeps the cache in sync with what's on
+    disk instead of invalidating it, so the very next request doesn't
+    trigger a redundant re-read of what we just wrote ourselves."""
     if not XLSX_PATH.exists():
         raise FileNotFoundError(f"Could not find {XLSX_PATH}.")
-    return openpyxl.load_workbook(XLSX_PATH, data_only=False)
+    mtime = XLSX_PATH.stat().st_mtime
+    if _wb_cache["wb"] is not None and _wb_cache["mtime"] == mtime:
+        return _wb_cache["wb"]
+    wb = openpyxl.load_workbook(XLSX_PATH, data_only=False)
+    _wb_cache["wb"] = wb
+    _wb_cache["mtime"] = mtime
+    return wb
+
+
+def save_wb(wb):
+    wb.save(XLSX_PATH)
+    _wb_cache["wb"] = wb
+    _wb_cache["mtime"] = XLSX_PATH.stat().st_mtime
 
 
 def headers_of(ws, header_row):
@@ -405,21 +427,26 @@ def get_project(project_id):
         if d.get("module") == project_name:
             items.append(d)
 
-    financial_ws = wb["Financial Tracker"]
-    fh = headers_of(financial_ws, 4)
-    financial = None
-    for r in range(5, last_data_row(financial_ws, 5) + 1):
-        if financial_ws.cell(row=r, column=1).value == project_id:
-            financial = row_to_dict(financial_ws, r, fh)
-            break
+    assigned_names = {i.get("assigned_to") for i in items if i.get("assigned_to")}
+    resources = []
+    for r in range(RES_FIRST_DATA_ROW, last_data_row(res, RES_FIRST_DATA_ROW, skip_prefix="note") + 1):
+        emp = res.cell(row=r, column=1).value
+        if emp and emp in assigned_names:
+            resources.append(with_utilization(row_to_dict(res, r, resh, RES_FIELDS)))
+
+    work_items = _all_work_items(wb)
+    financial = _financial_row(project, work_items)
+    billing = _billing_row(wb, project)
 
     return jsonify({
         "project": project,
+        "resources": resources,
         "tasks": [i for i in items if i["type"] == "Task"],
         "bugs": [i for i in items if i["type"] == "Bug"],
         "risks": [i for i in items if i["type"] == "Risk"],
         "change_requests": [i for i in items if i["type"] == "CR"],
         "financial": financial,
+        "billing": billing,
     })
 
 
@@ -435,7 +462,7 @@ def create_project():
          "priority": d.get("priority", "Medium"), "health": d.get("health", "Green"),
          "currency": d.get("currency", "USD")}
     write_fields(pm, new_row, pmh, d, PM_FIELDS, PM_DATES)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True, "project_id": project_id})
 
 
@@ -454,7 +481,7 @@ def update_project(project_id):
     if not target_row:
         return jsonify({"error": "Project not found"}), 404
     write_fields(pm, target_row, pmh, d, PM_FIELDS, PM_DATES)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -477,7 +504,7 @@ def delete_project(project_id):
         return jsonify({"error": "Project not found"}), 404
     for c in range(1, pm.max_column + 1):
         pm.cell(row=target_row, column=c).value = None
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -491,7 +518,7 @@ def archive_project(project_id):
     for r in range(PM_FIRST_DATA_ROW, last_data_row(pm, PM_FIRST_DATA_ROW) + 1):
         if pm.cell(row=r, column=id_col).value == project_id:
             pm.cell(row=r, column=status_col, value="Archived")
-            wb.save(XLSX_PATH)
+            save_wb(wb)
             return jsonify({"ok": True})
     return jsonify({"error": "Project not found"}), 404
 
@@ -518,13 +545,34 @@ def duplicate_project(project_id):
     if name_col:
         orig_name = pm.cell(row=src_row, column=name_col).value
         pm.cell(row=new_row, column=name_col, value=f"{orig_name} (Copy)")
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True, "project_id": new_id})
 
 
 # ---------------------------------------------------------------------------
 # RESOURCES
 # ---------------------------------------------------------------------------
+
+FTE_MONTHLY_HOURS = 160  # 1 full-time resource = 160 working hours/month
+
+
+def with_utilization(r):
+    """Monthly allocation math: Availability % is the resource's assigned
+    allocation on this project workload (100% = 160 hrs, 75% = 120, etc).
+    Purely derived -- not stored in Excel, since it's just availability x
+    160 restated a few different ways for the UI."""
+    availability = r.get("availability")
+    availability = 100 if availability is None else availability
+    allocated_hours = round(FTE_MONTHLY_HOURS * (availability / 100), 1)
+    available_hours = FTE_MONTHLY_HOURS
+    remaining_capacity = round(available_hours - allocated_hours, 1)
+    r["allocated_hours"] = allocated_hours
+    r["available_hours"] = available_hours
+    r["remaining_capacity"] = remaining_capacity
+    r["utilization_pct"] = round((allocated_hours / available_hours) * 100, 1) if available_hours else 0
+    r["overallocated"] = allocated_hours > available_hours
+    return r
+
 
 @app.route("/api/resources", methods=["GET"])
 def list_resources():
@@ -542,7 +590,7 @@ def list_resources():
         emp = res.cell(row=r, column=1).value
         if not emp:
             continue
-        rows.append(row_to_dict(res, r, resh, RES_FIELDS))
+        rows.append(with_utilization(row_to_dict(res, r, resh, RES_FIELDS)))
 
     if q:
         rows = [d for d in rows if q in " ".join(str(v).lower() for v in d.values() if v)]
@@ -556,9 +604,27 @@ def list_resources():
     return jsonify({"total": len(rows), "items": rows})
 
 
+def _check_allocation(d):
+    """Availability % above 100 means the resource is assigned more hours
+    than a single FTE has in a month (160 hrs). Block it unless the caller
+    explicitly passes override_allocation -- e.g. a deliberate short-term
+    crunch decision, not an accidental typo."""
+    availability = d.get("availability")
+    if availability is not None and availability > 100 and not d.get("override_allocation"):
+        return jsonify({
+            "error": "over_allocated",
+            "message": f"{availability}% allocation exceeds available capacity (160 hrs/month at 100%). "
+                       "Resubmit with override_allocation: true to proceed anyway.",
+        }), 409
+    return None
+
+
 @app.route("/api/resources", methods=["POST"])
 def create_resource():
     d = request.json
+    err = _check_allocation(d)
+    if err:
+        return err
     wb = load_wb()
     ws = wb[SHEET_RES]
     resh = headers_of(ws, RES_HEADER_ROW)
@@ -580,13 +646,16 @@ def create_resource():
     write_fields(ws, new_row, resh, d, RES_FIELDS, RES_DATES)
     if resh.get("Availability %") and "availability" not in d:
         ws.cell(row=new_row, column=resh["Availability %"], value=100)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True, "row": new_row})
 
 
 @app.route("/api/resources/<employee>", methods=["PUT"])
 def update_resource(employee):
     d = request.json
+    err = _check_allocation(d)
+    if err:
+        return err
     wb = load_wb()
     ws = wb[SHEET_RES]
     resh = headers_of(ws, RES_HEADER_ROW)
@@ -598,7 +667,7 @@ def update_resource(employee):
     if not target_row:
         return jsonify({"error": "Resource not found"}), 404
     write_fields(ws, target_row, resh, d, RES_FIELDS, RES_DATES)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -616,7 +685,7 @@ def delete_resource(employee):
         return jsonify({"error": "Resource not found"}), 404
     for c in range(1, ws.max_column + 1):
         ws.cell(row=target_row, column=c).value = None
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -679,7 +748,7 @@ def create_workitem():
     item_id = next_seq_id(ws, wih.get("ID", 2), f"{code}-{TYPE_PREFIX.get(wtype, 'X')}")
     d = {**d, "id": item_id}
     write_fields(ws, new_row, wih, d, WI_FIELDS, WI_DATES)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True, "id": item_id})
 
 
@@ -698,7 +767,7 @@ def update_workitem(item_id):
     if not target_row:
         return jsonify({"error": "Work item not found"}), 404
     write_fields(ws, target_row, wih, d, WI_FIELDS, WI_DATES)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -719,7 +788,7 @@ def delete_workitem(item_id):
     if not target_row:
         return jsonify({"error": "Work item not found"}), 404
     ws.delete_rows(target_row, 1)
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True})
 
 
@@ -737,7 +806,7 @@ def bulk_update_workitems():
         if ws.cell(row=r, column=id_col).value in ids:
             write_fields(ws, r, wih, changes, WI_FIELDS, WI_DATES)
             updated += 1
-    wb.save(XLSX_PATH)
+    save_wb(wb)
     return jsonify({"ok": True, "updated": updated})
 
 
@@ -758,6 +827,33 @@ def list_change_requests():
         return list_workitems()
 
 
+def _set_workitem_status(item_id, status, expected_type=None):
+    wb = load_wb()
+    ws = wb[SHEET_WI]
+    wih = headers_of(ws, WI_HEADER_ROW)
+    id_col = wih.get("ID", 2)
+    type_col = wih.get("Type", 1)
+    status_col = wih.get("Status")
+    for r in range(WI_FIRST_DATA_ROW, last_data_row(ws, WI_FIRST_DATA_ROW) + 1):
+        if ws.cell(row=r, column=id_col).value == item_id:
+            if expected_type and ws.cell(row=r, column=type_col).value != expected_type:
+                return jsonify({"error": f"{item_id} is not a {expected_type}"}), 400
+            ws.cell(row=r, column=status_col, value=status)
+            save_wb(wb)
+            return jsonify({"ok": True})
+    return jsonify({"error": "Not found"}), 404
+
+
+@app.route("/api/change-requests/<item_id>/approve", methods=["POST"])
+def approve_change_request(item_id):
+    return _set_workitem_status(item_id, "Approved", expected_type="CR")
+
+
+@app.route("/api/change-requests/<item_id>/reject", methods=["POST"])
+def reject_change_request(item_id):
+    return _set_workitem_status(item_id, "Rejected", expected_type="CR")
+
+
 # ---------------------------------------------------------------------------
 # FINANCIAL / BILLING -- read-only from their report sheets
 # ---------------------------------------------------------------------------
@@ -770,62 +866,139 @@ def _billing_model(project_type):
     return "T&M (Hours × Rate)"
 
 
+def _all_work_items(wb):
+    wi = wb[SHEET_WI]
+    wih = headers_of(wi, WI_HEADER_ROW)
+    return [row_to_dict(wi, r, wih, WI_FIELDS)
+            for r in range(WI_FIRST_DATA_ROW, last_data_row(wi, WI_FIRST_DATA_ROW) + 1)]
+
+
+def _financial_row(p, work_items):
+    """Mirrors Financial Tracker's own formulas in Python -- reading that
+    sheet's cells directly returns raw formula text (openpyxl can't
+    evaluate formulas, and strips cached results whenever we save), so
+    every number here is computed straight from the source sheets instead,
+    the same approach /api/dashboard already uses. Genuinely manual-input
+    columns on that sheet (Invoiced/Received/SOW Pending/Blended Rate)
+    stay None -- there's no source data for them to compute from, and the
+    frontend renders that as "--" rather than a fabricated 0.
+    """
+    actual_hrs = sum(
+        (i.get("actual_effort") or 0) for i in work_items
+        if i.get("type") == "Task" and i.get("module") == p.get("project_name")
+    )
+    planned_hrs = sum(
+        (i.get("original_effort") or 0) for i in work_items
+        if i.get("type") == "Task" and i.get("module") == p.get("project_name")
+    )
+    sow_hrs = p.get("sow_hrs") or 0
+    sow_amount = p.get("sow_value")
+    blended_rate = None  # manual-input on the sheet; no source to derive it from
+    budget_utilization = round((actual_hrs / sow_hrs) * 100, 1) if sow_hrs else 0
+    ev = (sow_hrs - actual_hrs) * (blended_rate or 0)
+    return {
+        # -- Project Details --
+        "project_id": p.get("project_id"),
+        "project_name": p.get("project_name"),
+        "pm": p.get("pm"),
+        "account_manager": p.get("account_manager"),
+        "project_type": p.get("project_type"),
+        "status": p.get("status"),
+        "start_date": p.get("start_date"),
+        "end_date": p.get("end_date"),
+        "budget": sow_amount,           # no separate "Budget" column exists; SOW Value is the project's budget
+        "sow_amount": sow_amount,
+        # -- Financial Details --
+        "actual_hours": actual_hrs,
+        "planned_hours": planned_hrs,
+        "blended_rate": blended_rate,
+        "revenue": None,                # not tracked anywhere in the workbook
+        "received": None,               # manual-input on Financial Tracker
+        "outstanding": None,            # manual-input on Financial Tracker (AR Outstanding)
+        "earned_value": ev,
+        "budget_utilization": budget_utilization,
+        "invoice_amount": None,         # manual-input on Financial Tracker (Invoiced)
+        "margin": None,                 # would need resource cost data not present in the workbook
+        "forecast": None,               # not tracked anywhere in the workbook
+    }
+
+
+def _milestones_for_project(wb, project_id, sow_value):
+    """The Fixed Bid milestone-billing block on Billing Milestones is a
+    per-project table (Project / Milestone / % of SOW / Amount / Status)
+    located dynamically by its own header row, not a fixed range -- so
+    this still works if rows get added/removed above it."""
+    bm = wb["Billing Milestones"]
+    header_row = None
+    for r in range(1, bm.max_row + 1):
+        vals = [bm.cell(row=r, column=c).value for c in range(1, 6)]
+        if vals[:2] == ["Project", "Milestone"]:
+            header_row = r
+            break
+    if not header_row:
+        return []
+    milestones = []
+    r = header_row + 1
+    while r <= bm.max_row:
+        pid = bm.cell(row=r, column=1).value
+        if not pid or not re.match(r"^P\d+$", str(pid)):
+            break
+        if pid == project_id:
+            pct = bm.cell(row=r, column=3).value or 0
+            milestones.append({
+                "milestone": bm.cell(row=r, column=2).value,
+                "pct_of_sow": pct,
+                "amount": round((sow_value or 0) * pct, 2),
+                "status": bm.cell(row=r, column=5).value,
+            })
+        r += 1
+    return milestones
+
+
+def _billing_row(wb, p):
+    sow_value = p.get("sow_value")
+    return {
+        # -- Project Details --
+        "project_id": p.get("project_id"),
+        "project_name": p.get("project_name"),
+        "pm": p.get("pm"),
+        "project_type": p.get("project_type"),
+        "status": p.get("status"),
+        "billing_model": _billing_model(p.get("project_type")),
+        "sow_value": sow_value,
+        # -- Invoice details (no dedicated invoicing sheet exists in the
+        # workbook yet, so these stay manual-input placeholders rather
+        # than fabricated numbers) --
+        "invoice_date": None,
+        "due_date": None,
+        "paid_date": None,
+        "invoice_amount": None,
+        "payment_status": None,
+        "outstanding_amount": None,
+        # -- Milestones (Fixed Bid projects only) --
+        "milestones": _milestones_for_project(wb, p.get("project_id"), sow_value)
+                      if p.get("project_type") == "One Time - Implementation" else [],
+    }
+
+
 @app.route("/api/financial")
 def financial():
-    # Financial Tracker is a formula-driven VIEW of Projects Master / Work
-    # Items. openpyxl can't evaluate formulas (and strips cached results on
-    # save), so reading its cells directly returns raw formula text, not
-    # numbers. Instead this mirrors the sheet's own formulas in Python,
-    # straight from the source sheets -- the same approach /api/dashboard
-    # uses. Invoiced/Received/SOW Pending/Blended Rate are genuinely
-    # manual-input columns on that sheet (blank formulas), so they stay
-    # None here too -- the frontend already renders that as "--".
     wb = load_wb()
     pm = wb[SHEET_PM]
-    wi = wb[SHEET_WI]
     pmh = headers_of(pm, PM_HEADER_ROW)
-    wih = headers_of(wi, WI_HEADER_ROW)
-
-    work_items = [row_to_dict(wi, r, wih, WI_FIELDS)
-                  for r in range(WI_FIRST_DATA_ROW, last_data_row(wi, WI_FIRST_DATA_ROW) + 1)]
+    work_items = _all_work_items(wb)
 
     rows = []
     for r in range(PM_FIRST_DATA_ROW, last_data_row(pm, PM_FIRST_DATA_ROW) + 1):
         p = row_to_dict(pm, r, pmh, PM_FIELDS)
         if not p.get("project_id"):
             continue
-        actual_hrs = sum(
-            (i.get("actual_effort") or 0) for i in work_items
-            if i.get("type") == "Task" and i.get("module") == p.get("project_name")
-        )
-        sow_hrs = p.get("sow_hrs") or 0
-        blended_rate = None  # manual-input on the sheet
-        ev = (sow_hrs - actual_hrs) * (blended_rate or 0)
-        rows.append({
-            "project_id": p.get("project_id"),
-            "project_name": p.get("project_name"),
-            "project_type": p.get("project_type"),
-            "sow_amount": p.get("sow_value"),
-            "invoiced": None,
-            "received": None,
-            "ar_outstanding": None,
-            "sow_pending": None,
-            "sow_hrs": sow_hrs,
-            "actual_hrs": actual_hrs,
-            "blended_rate": blended_rate,
-            "ev": ev,
-        })
+        rows.append(_financial_row(p, work_items))
     return jsonify({"items": rows})
 
 
 @app.route("/api/billing")
 def billing():
-    # Billing Milestones' summary table is likewise a formula view of
-    # Projects Master -- computed here directly instead of read as text.
-    # "Scheduled Billing" refers to a manual milestone/team-pricing detail
-    # block elsewhere on the sheet (bespoke per contract), so it stays a
-    # manual-input placeholder, consistent with the README's documented
-    # scope exception.
     wb = load_wb()
     pm = wb[SHEET_PM]
     pmh = headers_of(pm, PM_HEADER_ROW)
@@ -835,14 +1008,7 @@ def billing():
         p = row_to_dict(pm, r, pmh, PM_FIELDS)
         if not p.get("project_id"):
             continue
-        rows.append({
-            "project_id": p.get("project_id"),
-            "project_name": p.get("project_name"),
-            "project_type": p.get("project_type"),
-            "billing_model": _billing_model(p.get("project_type")),
-            "sow_value": p.get("sow_value"),
-            "scheduled_billing": None,
-        })
+        rows.append(_billing_row(wb, p))
     return jsonify({"items": rows})
 
 

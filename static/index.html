@@ -538,16 +538,28 @@ async function saveProject(id){
     if(id){ await api(`/projects/${id}`, {method:'PUT', body:payload}); toast('Project updated', 'success'); }
     else { await api('/projects', {method:'POST', body:payload}); toast('Project created', 'success'); }
     closeModal(); loadProjectsTable();
+    if(state.route==='dashboard') renderDashboard();
+    if(window._currentProjectId===id) refreshProjectView();
   }catch(e){ toast(e.message, 'error'); }
 }
 function deleteProject(id){
   confirmDialog('Delete Project', `Delete project ${id}? This clears it from Projects Master.`, async () => {
-    try{ await api(`/projects/${id}`, {method:'DELETE'}); toast('Project deleted', 'success'); loadProjectsTable(); }
+    try{
+      await api(`/projects/${id}`, {method:'DELETE'});
+      toast('Project deleted', 'success');
+      loadProjectsTable();
+      if(state.route==='dashboard') renderDashboard();
+    }
     catch(e){ toast(e.message, 'error'); }
   });
 }
 async function archiveProject(id){
-  try{ await api(`/projects/${id}/archive`, {method:'POST'}); toast('Project archived', 'success'); loadProjectsTable(); }
+  try{
+    await api(`/projects/${id}/archive`, {method:'POST'});
+    toast('Project archived', 'success');
+    loadProjectsTable();
+    if(state.route==='dashboard') renderDashboard();
+  }
   catch(e){ toast(e.message, 'error'); }
 }
 async function duplicateProject(id){
@@ -567,12 +579,46 @@ async function viewProject(id){
       <button class="btn" onclick="navigate('projects')">← Back to Projects</button>
     </div>
     <div class="tabs-row" id="projTabs">
-      ${['Overview','Tasks','Bugs','Risks','CRs','Financials'].map((t,i)=>`<div class="t ${i===0?'active':''}" onclick="showProjTab(this,'${t}')">${t}</div>`).join('')}
+      ${['Overview','Resources','Work Items','Risks','CRs','Financials','Billing'].map((t,i)=>`<div class="t ${i===0?'active':''}" onclick="showProjTab(this,'${t}')">${t}</div>`).join('')}
     </div>
     <div id="projTabBody"></div>
   `;
   window._projData = data;
+  window._currentProjectId = id;
   showProjTab(document.querySelector('#projTabs .t'), 'Overview');
+}
+async function refreshProjectView(){
+  if(window._currentProjectId) await viewProject(window._currentProjectId);
+}
+const FIN_LABELS = {
+  project_id:'Project ID', project_name:'Project Name', pm:'Project Manager', account_manager:'Account Manager',
+  project_type:'Project Type', status:'Status', start_date:'Start Date', end_date:'End Date',
+  budget:'Budget', sow_amount:'SOW Amount',
+  actual_hours:'Actual Hours', planned_hours:'Planned Hours', blended_rate:'Blended Rate',
+  revenue:'Revenue', received:'Received', outstanding:'Outstanding', earned_value:'Earned Value',
+  budget_utilization:'Budget Utilization', invoice_amount:'Invoice Amount', margin:'Margin', forecast:'Forecast',
+};
+function financialDetailCards(f){
+  const projectFields = ['project_id','project_name','pm','account_manager','project_type','status','start_date','end_date','budget','sow_amount'];
+  const finFields = ['actual_hours','planned_hours','blended_rate','revenue','received','outstanding','earned_value','budget_utilization','invoice_amount','margin','forecast'];
+  const row = (k) => `<div class="widget-item"><span>${esc(FIN_LABELS[k]||k)}</span><span class="t">${k==='budget_utilization' ? (f[k]!=null?f[k]+'%':'—') : fmtNum(f[k])}</span></div>`;
+  return `<div class="grid grid-2">
+    <div class="card"><div class="section-title">Project Details</div>${projectFields.map(row).join('')}</div>
+    <div class="card"><div class="section-title">Financial Details</div>${finFields.map(row).join('')}</div>
+  </div>`;
+}
+function billingDetailCards(b){
+  const projectFields = [['project_id','Project ID'],['project_name','Project Name'],['pm','Project Manager'],['project_type','Project Type'],['status','Status'],['billing_model','Billing Model'],['sow_value','SOW Value']];
+  const invoiceFields = [['invoice_date','Invoice Date'],['due_date','Due Date'],['paid_date','Paid Date'],['invoice_amount','Invoice Amount'],['payment_status','Payment Status'],['outstanding_amount','Outstanding Amount']];
+  return `<div class="grid grid-2">
+    <div class="card"><div class="section-title">Project Details</div>${projectFields.map(([k,l])=>`<div class="widget-item"><span>${l}</span><span class="t">${fmtNum(b[k])}</span></div>`).join('')}</div>
+    <div class="card"><div class="section-title">Invoice / Payment Details</div>${invoiceFields.map(([k,l])=>`<div class="widget-item"><span>${l}</span><span class="t">${fmtNum(b[k])}</span></div>`).join('')}</div>
+    <div class="card" style="grid-column:1/-1;"><div class="section-title">Milestones</div>
+      ${b.milestones && b.milestones.length ? `<table><thead><tr><th>Milestone</th><th>% of SOW</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>${b.milestones.map(m=>`<tr><td>${esc(m.milestone)}</td><td>${(m.pct_of_sow*100).toFixed(0)}%</td><td>$${fmtNum(m.amount)}</td><td>${statusBadge(m.status)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty-state">No milestone schedule for this project (Fixed Monthly / T&M projects bill differently — see Financial tab)</div>'}
+    </div>
+  </div>`;
 }
 function showProjTab(el, tab){
   document.querySelectorAll('#projTabs .t').forEach(t=>t.classList.remove('active'));
@@ -586,22 +632,24 @@ function showProjTab(el, tab){
         ${['project_id','project_name','pm','account_manager','project_type','business_unit','technology','start_date','end_date'].map(k=>`
         <div class="widget-item"><span>${k.replace(/_/g,' ')}</span><span class="t">${esc(p[k])}</span></div>`).join('')}
       </div>
-      <div class="card"><div class="section-title">Financials</div>
-        ${data.financial ? Object.entries(data.financial).filter(([k])=>k!=='_row').map(([k,v])=>`
-        <div class="widget-item"><span>${esc(k)}</span><span class="t">${esc(v)}</span></div>`).join('') : '<div class="empty-state">No financial data</div>'}
+      <div class="card"><div class="section-title">Financial Snapshot</div>
+        ${data.financial ? [['sow_amount','SOW Amount'],['actual_hours','Actual Hours'],['planned_hours','Planned Hours'],['budget_utilization','Budget Utilization']].map(([k,l])=>`
+        <div class="widget-item"><span>${l}</span><span class="t">${k==='budget_utilization'?data.financial[k]+'%':fmtNum(data.financial[k])}</span></div>`).join('') : '<div class="empty-state">No financial data</div>'}
       </div>
       <div class="card full" style="grid-column:1/-1;"><div class="section-title">Description</div><p style="color:var(--muted);">${esc(p.description)||'No description.'}</p></div>
     </div>`;
-  } else if(tab==='Tasks' || tab==='Bugs'){
-    const items = tab==='Tasks' ? data.tasks : data.bugs;
-    body.innerHTML = simpleItemTable(items);
+  } else if(tab==='Resources'){
+    body.innerHTML = resourceUtilTable(data.resources || []);
+  } else if(tab==='Work Items'){
+    body.innerHTML = simpleItemTable([...data.tasks, ...data.bugs]);
   } else if(tab==='Risks'){
     body.innerHTML = simpleItemTable(data.risks, true);
   } else if(tab==='CRs'){
     body.innerHTML = simpleItemTable(data.change_requests);
   } else if(tab==='Financials'){
-    body.innerHTML = data.financial ? `<div class="card">${Object.entries(data.financial).filter(([k])=>k!=='_row').map(([k,v])=>`
-      <div class="widget-item"><span>${esc(k)}</span><span class="t">${esc(v)}</span></div>`).join('')}</div>` : '<div class="empty-state">No financial row found for this project</div>';
+    body.innerHTML = data.financial ? financialDetailCards(data.financial) : '<div class="empty-state">No financial row found for this project</div>';
+  } else if(tab==='Billing'){
+    body.innerHTML = data.billing ? billingDetailCards(data.billing) : '<div class="empty-state">No billing row found for this project</div>';
   }
 }
 function simpleItemTable(items, showRisk=false){
@@ -627,19 +675,42 @@ async function renderResources(){
   await loadResourcesTable();
 }
 function applyResourceFilters(){ resourcesQuery.q = document.getElementById('rf-q').value; loadResourcesTable(); }
+function utilBar(pct, overallocated){
+  const color = overallocated ? 'var(--err)' : pct >= 90 ? 'var(--warn)' : 'var(--ok)';
+  const w = Math.min(pct, 100);
+  return `<div style="display:flex;align-items:center;gap:8px;min-width:120px;">
+    <div style="flex:1;height:7px;border-radius:4px;background:var(--border);overflow:hidden;">
+      <div style="height:100%;width:${w}%;background:${color};"></div>
+    </div>
+    <span style="font-size:12px;color:${overallocated?'var(--err)':'var(--muted)'};white-space:nowrap;">${pct}%${overallocated?' ⚠':''}</span>
+  </div>`;
+}
 async function loadResourcesTable(){
   const params = new URLSearchParams({q:resourcesQuery.q});
   const data = await api('/resources?' + params.toString());
   document.getElementById('resourcesTableBody').innerHTML = `
-    <table><thead><tr><th>Employee</th><th>Role</th><th>Type</th><th>Manager</th><th>Level</th><th>Onsite/Offshore</th><th>Availability</th><th>Actions</th></tr></thead>
+    <table><thead><tr><th>Employee</th><th>Role</th><th>Type</th><th>Manager</th><th>Level</th><th>Onsite/Offshore</th>
+    <th>Allocated Hrs</th><th>Available Hrs</th><th>Remaining Cap.</th><th>Utilization</th><th>Actions</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(r=>`
       <tr><td>${esc(r.employee)}</td><td>${esc(r.role)}</td><td>${esc(r.resource_type)}</td><td>${esc(r.manager)}</td>
-      <td>${esc(r.level)}</td><td>${esc(r.onsite_offshore)}</td><td>${r.availability?r.availability+'%':'—'}</td>
+      <td>${esc(r.level)}</td><td>${esc(r.onsite_offshore)}</td>
+      <td>${fmtNum(r.allocated_hours)}h</td><td>${fmtNum(r.available_hours)}h</td>
+      <td style="color:${r.remaining_capacity<0?'var(--err)':'inherit'}">${fmtNum(r.remaining_capacity)}h</td>
+      <td>${utilBar(r.utilization_pct, r.overallocated)}</td>
       <td><div class="row-actions">
         <button title="Edit" onclick='openResourceModal(${JSON.stringify(r)})'>✎</button>
         <button title="Delete" onclick="deleteResource('${esc(r.employee)}')">🗑</button>
-      </div></td></tr>`).join('') : `<tr><td colspan="8" class="empty-state">No resources found</td></tr>`}
+      </div></td></tr>`).join('') : `<tr><td colspan="11" class="empty-state">No resources found</td></tr>`}
     </tbody></table>`;
+}
+function resourceUtilTable(items){
+  if(!items.length) return '<div class="empty-state">No resources assigned to this project yet</div>';
+  return `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Role</th><th>Onsite/Offshore</th>
+    <th>Allocated Hrs</th><th>Available Hrs</th><th>Remaining Cap.</th><th>Utilization</th></tr></thead>
+    <tbody>${items.map(r=>`<tr><td>${esc(r.employee)}</td><td>${esc(r.role)}</td><td>${esc(r.onsite_offshore)}</td>
+      <td>${fmtNum(r.allocated_hours)}h</td><td>${fmtNum(r.available_hours)}h</td>
+      <td style="color:${r.remaining_capacity<0?'var(--err)':'inherit'}">${fmtNum(r.remaining_capacity)}h</td>
+      <td>${utilBar(r.utilization_pct, r.overallocated)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function openResourceModal(r=null){
   const isEdit = !!r; r = r || {};
@@ -651,9 +722,11 @@ function openResourceModal(r=null){
       <div class="form-row"><label>Resource Type / Dept</label><input id="rf-type" value="${esc(r.resource_type)}"></div>
       <div class="form-row"><label>Manager</label><input id="rf-manager" value="${esc(r.manager)}"></div>
       <div class="form-row"><label>Level (1=senior)</label><input type="number" id="rf-level" value="${esc(r.level)||4}" min="1" max="5"></div>
+      <div class="form-row"><label>Onsite / Offshore</label>
+        <select id="rf-onsite">${['Onsite','Offshore'].map(x=>`<option ${r.onsite_offshore===x?'selected':''}>${x}</option>`).join('')}</select></div>
       <div class="form-row"><label>Email</label><input id="rf-email" value="${esc(r.email)}"></div>
       <div class="form-row"><label>Designation</label><input id="rf-designation" value="${esc(r.designation)}"></div>
-      <div class="form-row"><label>Availability %</label><input type="number" id="rf-avail" value="${esc(r.availability)||100}"></div>
+      <div class="form-row"><label>Availability % <span style="color:var(--muted);">(100% = 160 hrs/mo)</span></label><input type="number" id="rf-avail" value="${esc(r.availability)||100}"></div>
       <div class="form-row"><label>Billing Rate ($/hr)</label><input type="number" id="rf-rate" value="${esc(r.billing_rate)}"></div>
       <div class="form-row"><label>Joining Date</label><input type="date" id="rf-join" value="${esc(r.joining_date)}"></div>
       <div class="form-row"><label>Experience (yrs)</label><input type="number" id="rf-exp" value="${esc(r.experience)}"></div>
@@ -665,25 +738,44 @@ function openResourceModal(r=null){
       <button class="btn btn-primary" onclick="saveResource(${isEdit?`'${esc(r.employee)}'`:'null'})">Save</button>
     </div>`);
 }
-async function saveResource(employee){
+async function saveResource(employee, override=false){
   const payload = {
     employee: document.getElementById('rf-name').value, role: document.getElementById('rf-role').value,
     resource_type: document.getElementById('rf-type').value, manager: document.getElementById('rf-manager').value,
-    level: document.getElementById('rf-level').value, email: document.getElementById('rf-email').value,
+    level: document.getElementById('rf-level').value, onsite_offshore: document.getElementById('rf-onsite').value,
+    email: document.getElementById('rf-email').value,
     designation: document.getElementById('rf-designation').value, availability: document.getElementById('rf-avail').value,
     billing_rate: document.getElementById('rf-rate').value, joining_date: document.getElementById('rf-join').value,
     experience: document.getElementById('rf-exp').value, skills: document.getElementById('rf-skills').value,
   };
   if(!employee){ payload.is_support_team = document.getElementById('rf-support').checked; }
+  if(override) payload.override_allocation = true;
   try{
     if(employee){ await api(`/resources/${encodeURIComponent(employee)}`, {method:'PUT', body:payload}); toast('Resource updated', 'success'); }
     else { await api('/resources', {method:'POST', body:payload}); toast('Resource added', 'success'); }
-    closeModal(); loadResourcesTable();
-  }catch(e){ toast(e.message, 'error'); }
+    closeModal();
+    loadResourcesTable();
+    if(state.route==='dashboard') renderDashboard();
+    if(window._currentProjectId) refreshProjectView();
+  }catch(e){
+    if(e.message === 'over_allocated'){
+      confirmDialog('Allocation exceeds capacity',
+        `This allocation is above 160 hrs/month (100% of one FTE). Save anyway?`,
+        () => saveResource(employee, true));
+    } else {
+      toast(e.message, 'error');
+    }
+  }
 }
 function deleteResource(employee){
   confirmDialog('Delete Resource', `Remove ${employee} from Resources?`, async () => {
-    try{ await api(`/resources/${encodeURIComponent(employee)}`, {method:'DELETE'}); toast('Resource removed', 'success'); loadResourcesTable(); }
+    try{
+      await api(`/resources/${encodeURIComponent(employee)}`, {method:'DELETE'});
+      toast('Resource removed', 'success');
+      loadResourcesTable();
+      if(state.route==='dashboard') renderDashboard();
+      if(window._currentProjectId) refreshProjectView();
+    }
     catch(e){ toast(e.message, 'error'); }
   });
 }
@@ -720,16 +812,17 @@ async function loadWiTable(){
   const q = wiQuery;
   const params = new URLSearchParams({page:q.page, page_size:q.page_size, sort:q.sort, order:q.order, q:q.q, type:q.type, status:q.status, priority:q.priority});
   const data = await api('/workitems?' + params.toString());
-  const cols = [['id','ID'],['type','Type'],['summary','Summary'],['module','Project'],['assigned_to','Owner'],['priority','Priority'],['status','Status'],['end_date','Due']];
+  const cols = [['id','ID'],['type','Type'],['summary','Summary'],['module','Project'],['assigned_to','Owner'],['priority','Priority'],['status','Status'],['original_effort','Orig. Effort'],['actual_effort','Actual Effort'],['end_date','Due']];
   document.getElementById('wiTableBody').innerHTML = `
     <table><thead><tr>${cols.map(([k,l])=>`<th onclick="sortWi('${k}')">${l}</th>`).join('')}<th>Actions</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(i=>`
       <tr><td>${esc(i.id)}</td><td><span class="badge badge-gray">${esc(i.type)}</span></td><td>${esc(i.summary)}</td>
-      <td>${esc(i.module)}</td><td>${esc(i.assigned_to)}</td><td>${priorityBadge(i.priority)}</td><td>${statusBadge(i.status)}</td><td>${esc(i.end_date)}</td>
+      <td>${esc(i.module)}</td><td>${esc(i.assigned_to)}</td><td>${priorityBadge(i.priority)}</td><td>${statusBadge(i.status)}</td>
+      <td>${fmtNum(i.original_effort)}h</td><td>${fmtNum(i.actual_effort)}h</td><td>${esc(i.end_date)}</td>
       <td><div class="row-actions">
         <button title="Edit" onclick='openWorkItemModal(null, ${JSON.stringify(i)})'>✎</button>
         <button title="Delete" onclick="deleteWorkItem('${esc(i.id)}')">🗑</button>
-      </div></td></tr>`).join('') : `<tr><td colspan="9" class="empty-state">No work items match these filters</td></tr>`}
+      </div></td></tr>`).join('') : `<tr><td colspan="11" class="empty-state">No work items match these filters</td></tr>`}
     </tbody></table>
     <div class="pagination"><span>${data.total} item${data.total===1?'':'s'} total</span>
       <div><button ${q.page<=1?'disabled':''} onclick="wiQuery.page--;loadWiTable()">‹ Prev</button>
@@ -804,67 +897,199 @@ async function saveWorkItem(id){
   try{
     if(id){ await api(`/workitems/${id}`, {method:'PUT', body:payload}); toast('Work item updated', 'success'); }
     else { await api('/workitems', {method:'POST', body:payload}); toast('Work item created', 'success'); }
-    closeModal(); loadWiTable();
+    closeModal(); refreshCurrentWiView();
   }catch(e){ toast(e.message, 'error'); }
 }
 function deleteWorkItem(id){
   confirmDialog('Delete Work Item', `Delete ${id}? This cannot be undone.`, async () => {
-    try{ await api(`/workitems/${id}`, {method:'DELETE'}); toast('Deleted', 'success'); loadWiTable(); }
+    try{ await api(`/workitems/${id}`, {method:'DELETE'}); toast('Deleted', 'success'); refreshCurrentWiView(); }
+    catch(e){ toast(e.message, 'error'); }
+  });
+}
+// Work items, Risks, and Change Requests are all the same underlying sheet
+// (Type=Task/Bug/Risk/CR) -- refresh whichever of those tables/dashboard is
+// currently on screen after a create/edit/delete so every view stays live.
+function refreshCurrentWiView(){
+  if(state.route==='workitems') loadWiTable();
+  else if(state.route==='risks') loadRisksTable();
+  else if(state.route==='changerequests') loadCrTable();
+  else if(state.route==='dashboard') renderDashboard();
+  else if(state.route==='financial') renderFinancial();
+  if(window._currentProjectId) refreshProjectView();
+}
+
+// ---------------------------------------------------------------------------
+// RISKS -- full CRUD (writes through /api/workitems, Type=Risk)
+// ---------------------------------------------------------------------------
+let risksQuery = {q:'', status:'', priority:''};
+async function renderRisks(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Risks</h2><button class="btn btn-primary" onclick="openWorkItemModal('Risk')">+ Raise Risk</button></div>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <input id="rk-q" placeholder="Search risks…" value="${esc(risksQuery.q)}">
+        <select id="rk-status"><option value="">All Status</option>${['Open','Monitoring','Mitigated','Closed'].map(x=>`<option ${risksQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="rk-priority"><option value="">All Priority</option>${['P1','P2','P3'].map(x=>`<option ${risksQuery.priority===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyRiskFilters()">Apply</button>
+      </div>
+      <div id="risksBody">${tableSkeleton()}</div>
+    </div>`;
+  document.getElementById('rk-q').onkeydown = e => { if(e.key==='Enter') applyRiskFilters(); };
+  await loadRisksTable();
+}
+function applyRiskFilters(){
+  risksQuery.q = document.getElementById('rk-q').value;
+  risksQuery.status = document.getElementById('rk-status').value;
+  risksQuery.priority = document.getElementById('rk-priority').value;
+  loadRisksTable();
+}
+async function loadRisksTable(){
+  const params = new URLSearchParams({page_size:200, q:risksQuery.q, status:risksQuery.status, priority:risksQuery.priority});
+  const data = await api('/risks?' + params.toString());
+  document.getElementById('risksBody').innerHTML = `
+    <table><thead><tr><th>Risk ID</th><th>Project</th><th>Title</th><th>Owner</th><th>Probability</th><th>Impact</th><th>Score</th><th>Status</th><th>Target Date</th><th>Actions</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(r=>{
+      const score = (r.probability && r.impact) ? r.probability*r.impact : (r.legacy_risk_score||0);
+      return `<tr><td>${esc(r.id)}</td><td>${esc(r.module)}</td><td>${esc(r.summary)}</td><td>${esc(r.assigned_to)}</td><td>${esc(r.probability)||'—'}</td><td>${esc(r.impact)||'—'}</td>
+      <td>${priorityBadge(score >= 15 ? 'High' : score >= 5 ? 'Medium' : 'Low')} ${score}</td>
+      <td>${statusBadge(r.status)}</td><td>${esc(r.end_date)}</td>
+      <td><div class="row-actions">
+        <button title="Edit" onclick='openWorkItemModal(null, ${JSON.stringify(r)})'>✎</button>
+        <button title="Delete" onclick="deleteRisk('${esc(r.id)}')">🗑</button>
+      </div></td></tr>`;
+    }).join('') : `<tr><td colspan="10" class="empty-state">No risks logged</td></tr>`}
+    </tbody></table>`;
+}
+function deleteRisk(id){
+  confirmDialog('Delete Risk', `Delete risk ${id}? This cannot be undone.`, async () => {
+    try{
+      await api(`/workitems/${id}`, {method:'DELETE'});
+      toast('Risk deleted', 'success');
+      loadRisksTable();
+      if(state.route==='dashboard') renderDashboard();
+      if(window._currentProjectId) refreshProjectView();
+    }
     catch(e){ toast(e.message, 'error'); }
   });
 }
 
 // ---------------------------------------------------------------------------
-// RISKS / CHANGE REQUESTS (read-only filtered views)
+// CHANGE REQUESTS -- full CRUD + Approve/Reject (writes through /api/workitems, Type=CR)
 // ---------------------------------------------------------------------------
-async function renderRisks(){
-  const el = document.getElementById('content');
-  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Risks</h2><button class="btn btn-primary" onclick="openWorkItemModal('Risk')">+ Raise Risk</button></div><div class="table-wrap"><div id="risksBody">${tableSkeleton()}</div></div>`;
-  const data = await api('/risks?page_size=200');
-  document.getElementById('risksBody').innerHTML = `
-    <table><thead><tr><th>Risk ID</th><th>Project</th><th>Title</th><th>Probability</th><th>Impact</th><th>Score</th><th>Status</th><th>Target Date</th></tr></thead>
-    <tbody>${data.items.length ? data.items.map(r=>{
-      const score = (r.probability && r.impact) ? r.probability*r.impact : (r.legacy_risk_score||0);
-      return `<tr><td>${esc(r.id)}</td><td>${esc(r.module)}</td><td>${esc(r.summary)}</td><td>${esc(r.probability)||'—'}</td><td>${esc(r.impact)||'—'}</td>
-      <td>${priorityBadge(score >= 15 ? 'High' : score >= 5 ? 'Medium' : 'Low')} ${score}</td>
-      <td>${statusBadge(r.status)}</td><td>${esc(r.end_date)}</td></tr>`;
-    }).join('') : `<tr><td colspan="8" class="empty-state">No risks logged</td></tr>`}
-    </tbody></table>`;
-}
+let crQuery = {q:'', status:'', priority:''};
 async function renderChangeRequests(){
   const el = document.getElementById('content');
-  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Change Requests</h2><button class="btn btn-primary" onclick="openWorkItemModal('CR')">+ Raise CR</button></div><div class="table-wrap"><div id="crBody">${tableSkeleton()}</div></div>`;
-  const data = await api('/change-requests?page_size=200');
+  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Change Requests</h2><button class="btn btn-primary" onclick="openWorkItemModal('CR')">+ Raise CR</button></div>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <input id="cr-q" placeholder="Search change requests…" value="${esc(crQuery.q)}">
+        <select id="cr-status"><option value="">All Status</option>${['Pending Approval','Approved','Rejected','In Progress','Completed'].map(x=>`<option ${crQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="cr-priority"><option value="">All Priority</option>${['P1','P2','P3'].map(x=>`<option ${crQuery.priority===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyCrFilters()">Apply</button>
+      </div>
+      <div id="crBody">${tableSkeleton()}</div>
+    </div>`;
+  document.getElementById('cr-q').onkeydown = e => { if(e.key==='Enter') applyCrFilters(); };
+  await loadCrTable();
+}
+function applyCrFilters(){
+  crQuery.q = document.getElementById('cr-q').value;
+  crQuery.status = document.getElementById('cr-status').value;
+  crQuery.priority = document.getElementById('cr-priority').value;
+  loadCrTable();
+}
+async function loadCrTable(){
+  const params = new URLSearchParams({page_size:200, q:crQuery.q, status:crQuery.status, priority:crQuery.priority});
+  const data = await api('/change-requests?' + params.toString());
   document.getElementById('crBody').innerHTML = `
-    <table><thead><tr><th>CR ID</th><th>Project</th><th>Description</th><th>Priority</th><th>Status</th><th>CR Date</th><th>Target Date</th><th>Planned Hrs</th><th>Actual Hrs</th></tr></thead>
+    <table><thead><tr><th>CR ID</th><th>Project</th><th>Description</th><th>Priority</th><th>Status</th><th>CR Date</th><th>Target Date</th><th>Planned Hrs</th><th>Actual Hrs</th><th>Actions</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(c=>`
       <tr><td>${esc(c.id)}</td><td>${esc(c.module)}</td><td>${esc(c.summary)}</td><td>${priorityBadge(c.priority)}</td>
-      <td>${statusBadge(c.status)}</td><td>${esc(c.worked_date)}</td><td>${esc(c.end_date)}</td><td>${fmtNum(c.original_effort)}</td><td>${fmtNum(c.actual_effort)}</td></tr>`).join('') : `<tr><td colspan="9" class="empty-state">No change requests logged</td></tr>`}
+      <td>${statusBadge(c.status)}</td><td>${esc(c.worked_date)}</td><td>${esc(c.end_date)}</td><td>${fmtNum(c.original_effort)}</td><td>${fmtNum(c.actual_effort)}</td>
+      <td><div class="row-actions">
+        <button title="Edit" onclick='openWorkItemModal(null, ${JSON.stringify(c)})'>✎</button>
+        <button title="Approve" onclick="approveCr('${esc(c.id)}')">✓</button>
+        <button title="Reject" onclick="rejectCr('${esc(c.id)}')">✕</button>
+        <button title="Delete" onclick="deleteCr('${esc(c.id)}')">🗑</button>
+      </div></td></tr>`).join('') : `<tr><td colspan="10" class="empty-state">No change requests logged</td></tr>`}
     </tbody></table>`;
+}
+async function approveCr(id){
+  try{ await api(`/change-requests/${id}/approve`, {method:'POST'}); toast('Change request approved', 'success'); loadCrTable(); if(window._currentProjectId) refreshProjectView(); }
+  catch(e){ toast(e.message, 'error'); }
+}
+async function rejectCr(id){
+  try{ await api(`/change-requests/${id}/reject`, {method:'POST'}); toast('Change request rejected', 'success'); loadCrTable(); if(window._currentProjectId) refreshProjectView(); }
+  catch(e){ toast(e.message, 'error'); }
+}
+function deleteCr(id){
+  confirmDialog('Delete Change Request', `Delete ${id}? This cannot be undone.`, async () => {
+    try{
+      await api(`/workitems/${id}`, {method:'DELETE'});
+      toast('Change request deleted', 'success');
+      loadCrTable();
+      if(state.route==='dashboard') renderDashboard();
+      if(window._currentProjectId) refreshProjectView();
+    }
+    catch(e){ toast(e.message, 'error'); }
+  });
 }
 
 // ---------------------------------------------------------------------------
 // FINANCIAL / BILLING
 // ---------------------------------------------------------------------------
+let financialQuery = {status:'', pm:''};
 async function renderFinancial(){
   const el = document.getElementById('content');
-  el.innerHTML = `<h2 class="page-title">Financial</h2><div class="table-wrap"><div id="finBody">${tableSkeleton()}</div></div>`;
-  const data = await api('/financial');
-  if(!data.items.length){ document.getElementById('finBody').innerHTML = '<div class="empty-state">No financial data</div>'; return; }
-  const keys = Object.keys(data.items[0]).filter(k=>k!=='_row');
-  document.getElementById('finBody').innerHTML = `
-    <table><thead><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead>
-    <tbody>${data.items.map(r=>`<tr>${keys.map(k=>`<td>${fmtNum(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  el.innerHTML = `<h2 class="page-title">Financial</h2>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <select id="fin-status"><option value="">All Status</option>${['Active','On Hold','Closed'].map(x=>`<option ${financialQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyFinancialFilters()">Apply</button>
+      </div>
+      <div id="finBody">${tableSkeleton()}</div>
+    </div>`;
+  await loadFinancialTable();
 }
+function applyFinancialFilters(){ financialQuery.status = document.getElementById('fin-status').value; loadFinancialTable(); }
+async function loadFinancialTable(){
+  const data = await api('/financial');
+  let items = data.items;
+  if(financialQuery.status) items = items.filter(r=>r.status===financialQuery.status);
+  if(!items.length){ document.getElementById('finBody').innerHTML = '<div class="empty-state">No financial data</div>'; return; }
+  const projectCols = [['project_id','Project ID'],['project_name','Project Name'],['pm','PM'],['project_type','Type'],['status','Status'],['start_date','Start'],['end_date','End'],['sow_amount','SOW Amount']];
+  const finCols = [['actual_hours','Actual Hrs'],['planned_hours','Planned Hrs'],['blended_rate','Blended Rate'],['earned_value','EV'],['budget_utilization','Budget Util %'],['invoice_amount','Invoice Amt'],['outstanding','Outstanding'],['margin','Margin'],['forecast','Forecast']];
+  const allCols = [...projectCols, ...finCols];
+  document.getElementById('finBody').innerHTML = `
+    <table><thead><tr>${allCols.map(([k,l])=>`<th>${l}</th>`).join('')}</tr></thead>
+    <tbody>${items.map(r=>`<tr>${allCols.map(([k])=>`<td>${k==='status'?statusBadge(r[k]):(k==='budget_utilization'?(r[k]!=null?r[k]+'%':'—'):fmtNum(r[k]))}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+let billingQuery = {status:''};
 async function renderBilling(){
   const el = document.getElementById('content');
-  el.innerHTML = `<h2 class="page-title">Billing Milestones</h2><div class="table-wrap"><div id="billBody">${tableSkeleton()}</div></div>`;
+  el.innerHTML = `<h2 class="page-title">Billing</h2>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <select id="bill-status"><option value="">All Status</option>${['Active','On Hold','Closed'].map(x=>`<option ${billingQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyBillingFilters()">Apply</button>
+      </div>
+      <div id="billBody">${tableSkeleton()}</div>
+    </div>`;
+  await loadBillingTable();
+}
+function applyBillingFilters(){ billingQuery.status = document.getElementById('bill-status').value; loadBillingTable(); }
+async function loadBillingTable(){
   const data = await api('/billing');
-  if(!data.items.length){ document.getElementById('billBody').innerHTML = '<div class="empty-state">No billing data</div>'; return; }
-  const keys = Object.keys(data.items[0]).filter(k=>k!=='_row');
+  let items = data.items;
+  if(billingQuery.status) items = items.filter(r=>r.status===billingQuery.status);
+  if(!items.length){ document.getElementById('billBody').innerHTML = '<div class="empty-state">No billing data</div>'; return; }
+  const cols = [['project_id','Project ID'],['project_name','Project Name'],['pm','PM'],['project_type','Type'],['status','Status'],['billing_model','Billing Model'],['sow_value','SOW Value'],
+    ['invoice_date','Invoice Date'],['due_date','Due Date'],['paid_date','Paid Date'],['invoice_amount','Invoice Amt'],['payment_status','Payment Status'],['outstanding_amount','Outstanding']];
   document.getElementById('billBody').innerHTML = `
-    <table><thead><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead>
-    <tbody>${data.items.map(r=>`<tr>${keys.map(k=>`<td>${fmtNum(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    <table><thead><tr>${cols.map(([k,l])=>`<th>${l}</th>`).join('')}<th>Milestones</th></tr></thead>
+    <tbody>${items.map(r=>`<tr>${cols.map(([k])=>`<td>${k==='status'?statusBadge(r[k]):fmtNum(r[k])}</td>`).join('')}
+      <td>${r.milestones.length ? r.milestones.length + ' milestone(s)' : '—'}</td></tr>`).join('')}</tbody></table>`;
 }
 
 // ---------------------------------------------------------------------------
