@@ -79,7 +79,7 @@ h2.page-title{font-size:20px;margin:0 0 16px;}
 .section-title{font-size:14px;font-weight:600;margin:0 0 12px;}
 
 /* tables */
-.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow-x:auto;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);cursor:pointer;white-space:nowrap;font-size:12px;text-transform:uppercase;letter-spacing:.02em;}
 th:hover{color:var(--ink);}
@@ -874,8 +874,8 @@ function toggleWiExtra(){
       <div class="section-title">Risk Details</div>
       <div class="form-grid">
         <div class="form-row"><label>Probability (1-5)</label><input type="number" id="w-prob" min="1" max="5" value="${esc(item.probability)||3}"></div>
-        <div class="form-row"><label>Impact (1-5)</label><input type="number" id="w-impact" min="1" max="5" value="${esc(item.impact)||3}"></div>
         <div class="form-row"><label>Mitigation Hrs</label><input type="number" id="w-mitigation" value="${esc(item.mitigation_hrs)}"></div>
+        <div class="form-row"><label>Impact (1-5)</label><input type="number" id="w-impact" min="1" max="5" value="${esc(item.impact)||3}"></div>
       </div></div>`;
   } else { extra.innerHTML = ''; }
 }
@@ -947,17 +947,17 @@ async function loadRisksTable(){
   const params = new URLSearchParams({page_size:200, q:risksQuery.q, status:risksQuery.status, priority:risksQuery.priority});
   const data = await api('/risks?' + params.toString());
   document.getElementById('risksBody').innerHTML = `
-    <table><thead><tr><th>Risk ID</th><th>Project</th><th>Title</th><th>Owner</th><th>Probability</th><th>Impact</th><th>Score</th><th>Status</th><th>Target Date</th><th>Actions</th></tr></thead>
+    <table><thead><tr><th>Risk ID</th><th>Project</th><th>Title</th><th>Owner</th><th>Probability</th><th>Mitigation Hrs</th><th>Impact</th><th>Score</th><th>Status</th><th>Target Date</th><th>Actions</th></tr></thead>
     <tbody>${data.items.length ? data.items.map(r=>{
       const score = (r.probability && r.impact) ? r.probability*r.impact : (r.legacy_risk_score||0);
-      return `<tr><td>${esc(r.id)}</td><td>${esc(r.module)}</td><td>${esc(r.summary)}</td><td>${esc(r.assigned_to)}</td><td>${esc(r.probability)||'—'}</td><td>${esc(r.impact)||'—'}</td>
+      return `<tr><td>${esc(r.id)}</td><td>${esc(r.module)}</td><td>${esc(r.summary)}</td><td>${esc(r.assigned_to)}</td><td>${esc(r.probability)||'—'}</td><td>${fmtNum(r.mitigation_hrs)}</td><td>${esc(r.impact)||'—'}</td>
       <td>${priorityBadge(score >= 15 ? 'High' : score >= 5 ? 'Medium' : 'Low')} ${score}</td>
       <td>${statusBadge(r.status)}</td><td>${esc(r.end_date)}</td>
       <td><div class="row-actions">
         <button title="Edit" onclick='openWorkItemModal(null, ${JSON.stringify(r)})'>✎</button>
         <button title="Delete" onclick="deleteRisk('${esc(r.id)}')">🗑</button>
       </div></td></tr>`;
-    }).join('') : `<tr><td colspan="10" class="empty-state">No risks logged</td></tr>`}
+    }).join('') : `<tr><td colspan="11" class="empty-state">No risks logged</td></tr>`}
     </tbody></table>`;
 }
 function deleteRisk(id){
