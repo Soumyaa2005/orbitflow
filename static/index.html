@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitFlow</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f4f6f8; --surface:#ffffff; --border:#dde2e8; --ink:#1c2b3a; --muted:#5b6b7c;
+  --accent:#1f4e79; --accent-2:#2c6ca8; --accent-light:#e8eef3;
+  --ok:#1e7145; --ok-light:#e6f2eb; --warn:#96591a; --warn-light:#faf1e2;
+  --err:#a02c2c; --err-light:#f7e8e8; --info:#2c5f8a; --info-light:#e8eff5;
+  --sidebar-w:230px; --radius:10px; --shadow:0 1px 3px rgba(20,30,40,.06);
+}
+[data-theme="dark"]{
+  --bg:#101820; --surface:#182530; --border:#2a3a48; --ink:#e4e9ed; --muted:#8ea0b0;
+  --accent:#4f8fc0; --accent-2:#2c6ca8; --accent-light:#1c2e3c;
+  --ok:#4caf7d; --ok-light:#132720; --warn:#d3982f; --warn-light:#2b2415;
+  --err:#d97a7a; --err-light:#2c1a1a; --info:#5a9bd4; --info-light:#152633;
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;}
+a{color:inherit;text-decoration:none;}
+button{font-family:inherit;}
+
+/* layout */
+#app{display:flex;min-height:100vh;}
+#sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);flex-shrink:0;transition:width .2s;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;}
+#sidebar.collapsed{width:64px;}
+.brand{display:flex;align-items:center;gap:10px;padding:18px 16px;font-weight:700;font-size:17px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;}
+.brand .dot{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));flex-shrink:0;}
+.nav{padding:10px;flex:1;}
+.nav-item{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:8px;color:var(--muted);cursor:pointer;margin-bottom:2px;white-space:nowrap;overflow:hidden;font-size:13.5px;}
+.nav-item:hover{background:var(--accent-light);color:var(--ink);}
+.nav-item.active{background:var(--accent-light);color:var(--accent);font-weight:600;}
+.nav-item svg{flex-shrink:0;width:18px;height:18px;}
+#sidebar.collapsed .nav-item span, #sidebar.collapsed .brand span{display:none;}
+.sidebar-footer{padding:12px;border-top:1px solid var(--border);}
+.collapse-btn{width:100%;padding:8px;border:1px solid var(--border);background:none;border-radius:8px;color:var(--muted);cursor:pointer;}
+
+#main{flex:1;min-width:0;display:flex;flex-direction:column;}
+#topbar{display:flex;align-items:center;gap:16px;padding:12px 24px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20;}
+.breadcrumb{font-size:13px;color:var(--muted);flex:1;}
+.breadcrumb b{color:var(--ink);}
+.search-box{position:relative;width:320px;}
+.search-box input{width:100%;padding:8px 12px 8px 34px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--ink);font-size:13px;}
+.search-box svg{position:absolute;left:10px;top:9px;width:16px;height:16px;color:var(--muted);}
+.icon-btn{border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:8px;cursor:pointer;color:var(--muted);display:flex;}
+.icon-btn:hover{color:var(--ink);}
+#content{padding:24px;flex:1;}
+
+/* search results dropdown */
+.search-results{position:absolute;top:38px;left:0;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:400px;overflow-y:auto;z-index:50;display:none;}
+.search-results.show{display:block;}
+.search-group-label{padding:8px 12px 4px;font-size:11px;text-transform:uppercase;color:var(--muted);font-weight:600;}
+.search-result-item{padding:8px 12px;cursor:pointer;font-size:13px;}
+.search-result-item:hover{background:var(--accent-light);}
+
+/* cards / grid */
+.grid{display:grid;gap:16px;}
+.grid-4{grid-template-columns:repeat(4,1fr);}
+.grid-3{grid-template-columns:repeat(3,1fr);}
+.grid-2{grid-template-columns:repeat(2,1fr);}
+@media(max-width:1100px){.grid-4{grid-template-columns:repeat(2,1fr);}.grid-3{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:640px){.grid-4,.grid-3,.grid-2{grid-template-columns:1fr;}#sidebar{position:fixed;z-index:100;left:-100%;}#sidebar.mobile-open{left:0;}}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);}
+.stat-card{display:flex;flex-direction:column;gap:6px;}
+.stat-card .label{color:var(--muted);font-size:12.5px;}
+.stat-card .value{font-size:26px;font-weight:700;}
+.stat-card .sub{font-size:12px;color:var(--muted);}
+.stat-card.accent-ok .value{color:var(--ok);}
+.stat-card.accent-warn .value{color:var(--warn);}
+.stat-card.accent-err .value{color:var(--err);}
+.stat-card.accent-info .value{color:var(--info);}
+
+h2.page-title{font-size:20px;margin:0 0 16px;}
+.section-title{font-size:14px;font-weight:600;margin:0 0 12px;}
+
+/* tables */
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;padding:10px 14px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);cursor:pointer;white-space:nowrap;font-size:12px;text-transform:uppercase;letter-spacing:.02em;}
+th:hover{color:var(--ink);}
+td{padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap;}
+tbody tr:hover{background:var(--accent-light);}
+tbody tr:last-child td{border-bottom:none;}
+.table-toolbar{display:flex;gap:10px;align-items:center;padding:14px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.table-toolbar select,.table-toolbar input{padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--ink);font-size:13px;}
+.pagination{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;font-size:12.5px;color:var(--muted);}
+.pagination button{border:1px solid var(--border);background:var(--surface);color:var(--ink);border-radius:6px;padding:5px 10px;cursor:pointer;}
+.pagination button:disabled{opacity:.4;cursor:not-allowed;}
+
+/* badges */
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600;}
+.badge-green{background:var(--ok-light);color:var(--ok);}
+.badge-yellow{background:var(--warn-light);color:var(--warn);}
+.badge-red{background:var(--err-light);color:var(--err);}
+.badge-blue{background:var(--info-light);color:var(--info);}
+.badge-gray{background:var(--bg);color:var(--muted);}
+
+/* buttons */
+.btn{padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--ink);cursor:pointer;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;}
+.btn:hover{border-color:var(--accent);}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+.btn-primary:hover{opacity:.9;}
+.btn-danger{color:var(--err);border-color:var(--err);}
+.btn-sm{padding:5px 10px;font-size:12px;}
+.actions-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.row-actions{display:flex;gap:6px;}
+.row-actions button{border:none;background:none;cursor:pointer;color:var(--muted);padding:4px;border-radius:5px;}
+.row-actions button:hover{background:var(--accent-light);color:var(--accent);}
+
+/* quick actions */
+.quick-actions{display:flex;gap:10px;flex-wrap:wrap;}
+.quick-actions button{flex:1;min-width:130px;}
+
+/* charts */
+.chart-card{height:290px;display:flex;flex-direction:column;}
+.chart-card canvas{flex:1;max-height:230px;}
+
+/* modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:200;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface);border-radius:12px;width:640px;max-width:92vw;max-height:88vh;overflow-y:auto;padding:24px;}
+.modal h3{margin:0 0 16px;}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 14px;}
+.form-grid .full{grid-column:1/-1;}
+.form-row label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px;}
+.form-row input,.form-row select,.form-row textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--ink);font-size:13px;}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px;}
+
+/* confirm dialog */
+.confirm-box{width:380px;text-align:center;}
+.confirm-box p{color:var(--muted);}
+
+/* toasts */
+#toasts{position:fixed;bottom:20px;right:20px;z-index:300;display:flex;flex-direction:column;gap:10px;}
+.toast{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--info);border-radius:8px;padding:12px 16px;min-width:260px;box-shadow:0 8px 20px rgba(0,0,0,.15);font-size:13px;animation:slidein .2s ease;}
+.toast.ok{border-left-color:var(--ok);}
+.toast.err{border-left-color:var(--err);}
+.toast.warn{border-left-color:var(--warn);}
+@keyframes slidein{from{transform:translateX(20px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+
+/* skeleton */
+.skeleton{background:linear-gradient(90deg,var(--border) 25%,var(--bg) 37%,var(--border) 63%);background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px;}
+@keyframes sk{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
+.sk-line{height:14px;margin-bottom:8px;}
+.sk-card{height:90px;}
+
+/* widget list */
+.widget-list{display:flex;flex-direction:column;gap:0;}
+.widget-item{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.widget-item:last-child{border-bottom:none;}
+.widget-item .t{color:var(--muted);font-size:12px;}
+
+.tabs-row{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px;}
+.tabs-row .t{padding:9px 14px;cursor:pointer;color:var(--muted);font-size:13px;border-bottom:2px solid transparent;}
+.tabs-row .t.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600;}
+
+.detail-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;}
+.detail-header h2{margin:0 0 4px;}
+.detail-meta{color:var(--muted);font-size:13px;}
+
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted);}
+kbd{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:11px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand"><div class="dot"></div><span>OrbitFlow</span></div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-footer">
+      <button class="collapse-btn" onclick="toggleSidebar()">⟨⟩</button>
+    </div>
+  </aside>
+
+  <div id="main">
+    <div id="topbar">
+      <div class="breadcrumb" id="breadcrumb"><b>Dashboard</b></div>
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="globalSearch" placeholder="Search projects, resources, tasks... (Ctrl+K)">
+        <div class="search-results" id="searchResults"></div>
+      </div>
+      <button class="icon-btn" title="Toggle theme" onclick="toggleTheme()">🌓</button>
+      <button class="icon-btn" title="Refresh workbook" onclick="refreshAll()">⟳</button>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBody"></div></div>
+<div class="modal-overlay" id="confirmOverlay"><div class="modal confirm-box" id="confirmBody"></div></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// state / utils
+// ---------------------------------------------------------------------------
+const state = { route: 'dashboard', lookups: null };
+
+function toggleTheme(){
+  const html = document.documentElement;
+  const cur = html.getAttribute('data-theme');
+  html.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  localStorage.setItem('orbitflow-theme', html.getAttribute('data-theme'));
+}
+(function(){
+  const saved = localStorage.getItem('orbitflow-theme');
+  if(saved) document.documentElement.setAttribute('data-theme', saved);
+})();
+
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('collapsed'); }
+
+function toast(msg, type='info'){
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type==='success'?'ok':type==='error'?'err':type==='warning'?'warn':'');
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>el.remove(), 4000);
+}
+
+function esc(s){ return (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtDate(d){ if(!d) return '—'; return d; }
+function fmtNum(n){ return (n===undefined||n===null||n==='') ? '—' : (typeof n === 'number' ? n.toLocaleString() : n); }
+
+async function api(path, opts={}){
+  const res = await fetch('/api' + path, {
+    headers: {'Content-Type':'application/json'},
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const json = await res.json().catch(()=>({}));
+  if(!res.ok || json.error) throw new Error(json.error || 'Request failed');
+  return json;
+}
+
+function closeModal(){ document.getElementById('modalOverlay').classList.remove('show'); }
+function openModal(html){
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function confirmDialog(title, msg, onConfirm){
+  document.getElementById('confirmBody').innerHTML = `
+    <h3>${esc(title)}</h3><p>${esc(msg)}</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('confirmOverlay').classList.remove('show')">Cancel</button>
+      <button class="btn btn-danger" id="confirmYes">Confirm</button>
+    </div>`;
+  document.getElementById('confirmOverlay').classList.add('show');
+  document.getElementById('confirmYes').onclick = () => {
+    document.getElementById('confirmOverlay').classList.remove('show');
+    onConfirm();
+  };
+}
+
+function healthBadge(v){
+  const map = {Green:'badge-green', Yellow:'badge-yellow', Red:'badge-red'};
+  return `<span class="badge ${map[v]||'badge-gray'}">${esc(v||'—')}</span>`;
+}
+function statusBadge(v){
+  const okSet = ['Completed','Fixed','Closed','Approved','Active'];
+  const warnSet = ['In Progress','Pending Approval','Monitoring','To Do'];
+  const errSet = ['Blocked','Open','Rejected'];
+  let cls = 'badge-gray';
+  if(okSet.includes(v)) cls='badge-green';
+  else if(warnSet.includes(v)) cls='badge-yellow';
+  else if(errSet.includes(v)) cls='badge-red';
+  return `<span class="badge ${cls}">${esc(v||'—')}</span>`;
+}
+function priorityBadge(v){
+  const map = {P1:'badge-red', P2:'badge-yellow', P3:'badge-blue', High:'badge-red', Medium:'badge-yellow', Low:'badge-blue'};
+  return `<span class="badge ${map[v]||'badge-gray'}">${esc(v||'—')}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// navigation
+// ---------------------------------------------------------------------------
+const NAV_ITEMS = [
+  {id:'dashboard', label:'Dashboard', icon:'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6'},
+  {id:'projects', label:'Projects', icon:'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'},
+  {id:'resources', label:'Resources', icon:'M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a4 4 0 10-4-4'},
+  {id:'workitems', label:'Work Items', icon:'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'},
+  {id:'risks', label:'Risks', icon:'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'},
+  {id:'changerequests', label:'Change Requests', icon:'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'},
+  {id:'financial', label:'Financial', icon:'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V6m0 10v2m9-8a9 9 0 11-18 0 9 9 0 0118 0z'},
+  {id:'billing', label:'Billing', icon:'M3 10h18M7 15h1m4 0h1m-7 4h12a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'},
+  {id:'reports', label:'Reports', icon:'M9 17v-2m3 2v-4m3 4v-6M6 21h12a2 2 0 002-2V5a2 2 0 00-2-2H6a2 2 0 00-2 2v14a2 2 0 002 2z'},
+  {id:'settings', label:'Settings', icon:'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z'},
+];
+
+function renderNav(){
+  document.getElementById('nav').innerHTML = NAV_ITEMS.map(it => `
+    <div class="nav-item ${state.route===it.id?'active':''}" onclick="navigate('${it.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="${it.icon}"/></svg>
+      <span>${it.label}</span>
+    </div>`).join('');
+}
+
+const PAGE_TITLES = {
+  dashboard:'Dashboard', projects:'Projects', resources:'Resources', workitems:'Work Items',
+  risks:'Risks', changerequests:'Change Requests', financial:'Financial', billing:'Billing',
+  reports:'Reports', settings:'Settings',
+};
+
+function navigate(route, params={}){
+  state.route = route;
+  state.params = params;
+  renderNav();
+  document.getElementById('breadcrumb').innerHTML = `<b>${PAGE_TITLES[route]||route}</b>`;
+  render();
+  window.scrollTo(0,0);
+}
+
+async function refreshAll(){
+  toast('Reloading workbook…', 'info');
+  await render();
+  toast('Workbook refreshed', 'success');
+}
+
+// ---------------------------------------------------------------------------
+// dashboard
+// ---------------------------------------------------------------------------
+let charts = {};
+function destroyCharts(){ Object.values(charts).forEach(c=>c && c.destroy()); charts={}; }
+
+async function renderDashboard(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="grid grid-4">${Array(8).fill('<div class="card skeleton sk-card"></div>').join('')}</div>`;
+  const data = await api('/dashboard');
+  const s = data.stats;
+
+  el.innerHTML = `
+    <div class="actions-row">
+      <h2 class="page-title" style="margin:0;">Welcome back 👋</h2>
+    </div>
+    <div class="grid grid-4" style="margin-bottom:20px;">
+      ${statCard('Total Projects', s.total_projects)}
+      ${statCard('Active Projects', s.active_projects, '', 'ok')}
+      ${statCard('Completed Projects', s.completed_projects)}
+      ${statCard('Delayed Projects', s.delayed_projects, '', s.delayed_projects>0?'err':'')}
+      ${statCard('Total Resources', s.total_resources)}
+      ${statCard('Open Tasks', s.open_tasks, '', 'warn')}
+      ${statCard('Completed Tasks', s.completed_tasks, '', 'ok')}
+      ${statCard('Open Bugs', s.open_bugs, '', s.open_bugs>0?'err':'')}
+      ${statCard('Closed Bugs', s.closed_bugs)}
+      ${statCard('Open Risks', s.open_risks, '', 'warn')}
+      ${statCard('High Risks', s.high_risks, '', s.high_risks>0?'err':'')}
+      ${statCard('Open CRs', s.open_crs)}
+      ${statCard('Budget Utilization', s.budget_utilization + '%', '', s.budget_utilization>90?'err':'ok')}
+      ${statCard('Planned Hours', fmtNum(s.planned_hours))}
+      ${statCard('Actual Hours', fmtNum(s.actual_hours))}
+    </div>
+
+    <div class="grid grid-3" style="margin-bottom:20px;">
+      <div class="card chart-card"><div class="section-title">Project Health</div><canvas id="chartHealth"></canvas></div>
+      <div class="card chart-card"><div class="section-title">Budget Utilization</div><canvas id="chartBudget"></canvas></div>
+      <div class="card chart-card"><div class="section-title">Tasks by Status</div><canvas id="chartTasks"></canvas></div>
+      <div class="card chart-card"><div class="section-title">Risks by Severity</div><canvas id="chartRisks"></canvas></div>
+      <div class="card chart-card"><div class="section-title">Workload Distribution</div><canvas id="chartWorkload"></canvas></div>
+      <div class="card"><div class="section-title">Quick Actions</div>
+        <div class="quick-actions" style="flex-direction:column;">
+          <button class="btn btn-primary" onclick="navigate('projects');setTimeout(()=>openProjectModal(),50)">+ Add Project</button>
+          <button class="btn" onclick="navigate('resources');setTimeout(()=>openResourceModal(),50)">+ Add Resource</button>
+          <button class="btn" onclick="navigate('workitems');setTimeout(()=>openWorkItemModal('Task'),50)">+ Add Task</button>
+          <button class="btn" onclick="navigate('workitems');setTimeout(()=>openWorkItemModal('Risk'),50)">+ Raise Risk</button>
+          <button class="btn" onclick="navigate('workitems');setTimeout(()=>openWorkItemModal('CR'),50)">+ Raise Change Request</button>
+          <button class="btn" onclick="window.location.href='/api/export'">⭳ Export Excel</button>
+          <button class="btn" onclick="refreshAll()">⟳ Refresh Workbook</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-3">
+      <div class="card"><div class="section-title">Upcoming Deadlines</div>
+        <div class="widget-list">${data.upcoming_deadlines.length ? data.upcoming_deadlines.map(i=>`
+          <div class="widget-item"><span>${esc(i.summary||i.id)}</span><span class="t">${esc(i.end_date||'')}</span></div>`).join('') : emptyRow()}</div>
+      </div>
+      <div class="card"><div class="section-title">Recent Activity</div>
+        <div class="widget-list">${data.recent_activity.length ? data.recent_activity.map(i=>`
+          <div class="widget-item"><span>${esc(i.summary||i.id)}</span><span class="t">${esc(i.worked_date||'')}</span></div>`).join('') : emptyRow()}</div>
+      </div>
+      <div class="card"><div class="section-title">Pending Approvals</div>
+        <div class="widget-list">${data.pending_approvals.length ? data.pending_approvals.map(i=>`
+          <div class="widget-item"><span>${esc(i.summary||i.id)}</span><span class="t">${esc(i.module||'')}</span></div>`).join('') : emptyRow()}</div>
+      </div>
+    </div>
+  `;
+
+  destroyCharts();
+  const palette = ['#1f4e79','#2c6ca8','#4caf7d','#d3982f','#a02c2c','#5a9bd4','#7a6a9e','#8ea0b0'];
+  const mkDoughnut = (id, obj) => new Chart(document.getElementById(id), {
+    type:'doughnut', data:{labels:Object.keys(obj), datasets:[{data:Object.values(obj), backgroundColor:palette}]},
+    options:{plugins:{legend:{position:'bottom', labels:{boxWidth:10,font:{size:10}}}}, maintainAspectRatio:false}
+  });
+  charts.health = mkDoughnut('chartHealth', data.charts.project_health);
+  charts.budget = new Chart(document.getElementById('chartBudget'), {
+    type:'doughnut', data:{labels:['Used','Remaining'], datasets:[{data:[s.budget_utilization, Math.max(0,100-s.budget_utilization)], backgroundColor:['#1f4e79','#dde2e8']}]},
+    options:{plugins:{legend:{position:'bottom'}}, maintainAspectRatio:false}
+  });
+  charts.tasks = new Chart(document.getElementById('chartTasks'), {
+    type:'bar', data:{labels:Object.keys(data.charts.tasks_by_status), datasets:[{data:Object.values(data.charts.tasks_by_status), backgroundColor:'#1f4e79'}]},
+    options:{plugins:{legend:{display:false}}, maintainAspectRatio:false}
+  });
+  charts.risks = mkDoughnut('chartRisks', data.charts.risks_by_severity);
+  charts.workload = new Chart(document.getElementById('chartWorkload'), {
+    type:'bar', data:{labels:Object.keys(data.charts.workload), datasets:[{data:Object.values(data.charts.workload), backgroundColor:'#2c6ca8'}]},
+    options:{indexAxis:'y', plugins:{legend:{display:false}}, maintainAspectRatio:false}
+  });
+}
+function statCard(label, value, sub='', accent=''){
+  return `<div class="card stat-card ${accent?'accent-'+accent:''}"><div class="label">${label}</div><div class="value">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+}
+function emptyRow(){ return `<div class="widget-item" style="color:var(--muted);">Nothing here yet</div>`; }
+
+// ---------------------------------------------------------------------------
+// generic data-table renderer
+// ---------------------------------------------------------------------------
+function tableSkeleton(){
+  return `<div class="table-wrap"><div style="padding:16px;">${Array(6).fill('<div class="skeleton sk-line"></div>').join('')}</div></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// PROJECTS
+// ---------------------------------------------------------------------------
+let projectsQuery = {page:1, page_size:10, sort:'', order:'asc', q:'', status:'', priority:'', health:''};
+
+async function renderProjects(){
+  const el = document.getElementById('content');
+  el.innerHTML = `
+    <div class="actions-row">
+      <h2 class="page-title">Projects</h2>
+      <button class="btn btn-primary" onclick="openProjectModal()">+ New Project</button>
+    </div>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <input id="pf-q" placeholder="Search projects…" value="${esc(projectsQuery.q)}">
+        <select id="pf-status"><option value="">All Status</option>${['Active','On Hold','Closed','Archived'].map(x=>`<option ${projectsQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="pf-priority"><option value="">All Priority</option>${['High','Medium','Low'].map(x=>`<option ${projectsQuery.priority===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="pf-health"><option value="">All Health</option>${['Green','Yellow','Red'].map(x=>`<option ${projectsQuery.health===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyProjectFilters()">Apply</button>
+      </div>
+      <div id="projectsTableBody">${tableSkeleton()}</div>
+    </div>`;
+  document.getElementById('pf-q').onkeydown = e => { if(e.key==='Enter') applyProjectFilters(); };
+  await loadProjectsTable();
+}
+function applyProjectFilters(){
+  projectsQuery.q = document.getElementById('pf-q').value;
+  projectsQuery.status = document.getElementById('pf-status').value;
+  projectsQuery.priority = document.getElementById('pf-priority').value;
+  projectsQuery.health = document.getElementById('pf-health').value;
+  projectsQuery.page = 1;
+  loadProjectsTable();
+}
+function sortProjects(col){
+  projectsQuery.order = (projectsQuery.sort===col && projectsQuery.order==='asc') ? 'desc' : 'asc';
+  projectsQuery.sort = col;
+  loadProjectsTable();
+}
+async function loadProjectsTable(){
+  const q = projectsQuery;
+  const params = new URLSearchParams({page:q.page, page_size:q.page_size, sort:q.sort, order:q.order, q:q.q, status:q.status, priority:q.priority, health:q.health});
+  const data = await api('/projects?' + params.toString());
+  const cols = [['project_id','ID'],['project_name','Name'],['pm','PM'],['status','Status'],['priority','Priority'],['health','Health'],['domain','Domain'],['sow_value','SOW Value']];
+  document.getElementById('projectsTableBody').innerHTML = `
+    <table><thead><tr>${cols.map(([k,l])=>`<th onclick="sortProjects('${k}')">${l}</th>`).join('')}<th>Actions</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(p=>`
+      <tr style="cursor:pointer" onclick="viewProject('${p.project_id}')">
+        <td onclick="event.stopPropagation()"><a onclick="viewProject('${p.project_id}')" style="color:var(--accent);cursor:pointer;">${esc(p.project_id)}</a></td>
+        <td>${esc(p.project_name)}</td><td>${esc(p.pm)}</td><td>${statusBadge(p.status)}</td>
+        <td>${priorityBadge(p.priority)}</td><td>${healthBadge(p.health)}</td><td>${esc(p.domain)}</td>
+        <td>${p.sow_value?('$'+fmtNum(p.sow_value)):'—'}</td>
+        <td onclick="event.stopPropagation()"><div class="row-actions">
+          <button title="Edit" onclick='openProjectModal(${JSON.stringify(p)})'>✎</button>
+          <button title="Duplicate" onclick="duplicateProject('${p.project_id}')">⧉</button>
+          <button title="Archive" onclick="archiveProject('${p.project_id}')">📦</button>
+          <button title="Delete" onclick="deleteProject('${p.project_id}')">🗑</button>
+        </div></td>
+      </tr>`).join('') : `<tr><td colspan="9" class="empty-state">No projects match these filters</td></tr>`}
+    </tbody></table>
+    <div class="pagination">
+      <span>${data.total} project${data.total===1?'':'s'} total</span>
+      <div>
+        <button ${q.page<=1?'disabled':''} onclick="projectsQuery.page--;loadProjectsTable()">‹ Prev</button>
+        <span style="margin:0 8px;">Page ${q.page}</span>
+        <button ${q.page*q.page_size>=data.total?'disabled':''} onclick="projectsQuery.page++;loadProjectsTable()">Next ›</button>
+      </div>
+    </div>`;
+}
+
+function openProjectModal(p=null){
+  const isEdit = !!p; p = p || {};
+  openModal(`
+    <h3>${isEdit?'Edit Project':'New Project'}</h3>
+    <div class="form-grid">
+      <div class="form-row full"><label>Project Name *</label><input id="f-name" value="${esc(p.project_name)}"></div>
+      <div class="form-row"><label>PM</label><input id="f-pm" value="${esc(p.pm)}"></div>
+      <div class="form-row"><label>Account Manager</label><input id="f-am" value="${esc(p.account_manager)}"></div>
+      <div class="form-row"><label>Project Type</label>
+        <select id="f-type">${['Fixed Monthly Block of Hours','One Time - Implementation','Time & Material','Fixed Bid'].map(x=>`<option ${p.project_type===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Status</label>
+        <select id="f-status">${['Active','On Hold','Closed'].map(x=>`<option ${p.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Priority</label>
+        <select id="f-priority">${['High','Medium','Low'].map(x=>`<option ${p.priority===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Health</label>
+        <select id="f-health">${['Green','Yellow','Red'].map(x=>`<option ${p.health===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Domain</label><input id="f-domain" value="${esc(p.domain)}"></div>
+      <div class="form-row"><label>Business Unit</label><input id="f-bu" value="${esc(p.business_unit)}"></div>
+      <div class="form-row"><label>Technology</label><input id="f-tech" value="${esc(p.technology)}"></div>
+      <div class="form-row"><label>Start Date</label><input type="date" id="f-start" value="${esc(p.start_date)}"></div>
+      <div class="form-row"><label>End Date</label><input type="date" id="f-end" value="${esc(p.end_date)}"></div>
+      <div class="form-row"><label>SOW Hrs</label><input type="number" id="f-hrs" value="${esc(p.sow_hrs)}"></div>
+      <div class="form-row"><label>SOW Value</label><input type="number" id="f-value" value="${esc(p.sow_value)}"></div>
+      <div class="form-row"><label>Currency</label><input id="f-currency" value="${esc(p.currency)||'USD'}"></div>
+      <div class="form-row full"><label>Description</label><textarea id="f-desc">${esc(p.description)}</textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProject(${isEdit?`'${p.project_id}'`:'null'})">Save</button>
+    </div>`);
+}
+async function saveProject(id){
+  const payload = {
+    project_name: document.getElementById('f-name').value, pm: document.getElementById('f-pm').value,
+    account_manager: document.getElementById('f-am').value, project_type: document.getElementById('f-type').value,
+    status: document.getElementById('f-status').value, priority: document.getElementById('f-priority').value,
+    health: document.getElementById('f-health').value, domain: document.getElementById('f-domain').value,
+    business_unit: document.getElementById('f-bu').value, technology: document.getElementById('f-tech').value,
+    start_date: document.getElementById('f-start').value, end_date: document.getElementById('f-end').value,
+    sow_hrs: document.getElementById('f-hrs').value, sow_value: document.getElementById('f-value').value,
+    currency: document.getElementById('f-currency').value, description: document.getElementById('f-desc').value,
+  };
+  try{
+    if(id){ await api(`/projects/${id}`, {method:'PUT', body:payload}); toast('Project updated', 'success'); }
+    else { await api('/projects', {method:'POST', body:payload}); toast('Project created', 'success'); }
+    closeModal(); loadProjectsTable();
+  }catch(e){ toast(e.message, 'error'); }
+}
+function deleteProject(id){
+  confirmDialog('Delete Project', `Delete project ${id}? This clears it from Projects Master.`, async () => {
+    try{ await api(`/projects/${id}`, {method:'DELETE'}); toast('Project deleted', 'success'); loadProjectsTable(); }
+    catch(e){ toast(e.message, 'error'); }
+  });
+}
+async function archiveProject(id){
+  try{ await api(`/projects/${id}/archive`, {method:'POST'}); toast('Project archived', 'success'); loadProjectsTable(); }
+  catch(e){ toast(e.message, 'error'); }
+}
+async function duplicateProject(id){
+  try{ const r = await api(`/projects/${id}/duplicate`, {method:'POST'}); toast('Duplicated as ' + r.project_id, 'success'); loadProjectsTable(); }
+  catch(e){ toast(e.message, 'error'); }
+}
+
+async function viewProject(id){
+  const el = document.getElementById('content');
+  el.innerHTML = tableSkeleton();
+  const data = await api(`/projects/${id}`);
+  const p = data.project;
+  el.innerHTML = `
+    <div class="detail-header">
+      <div><h2>${esc(p.project_name)} <span style="color:var(--muted);font-weight:400;">(${esc(p.project_id)})</span></h2>
+      <div class="detail-meta">${statusBadge(p.status)} ${priorityBadge(p.priority)} ${healthBadge(p.health)} · PM: ${esc(p.pm)} · ${esc(p.domain)}</div></div>
+      <button class="btn" onclick="navigate('projects')">← Back to Projects</button>
+    </div>
+    <div class="tabs-row" id="projTabs">
+      ${['Overview','Tasks','Bugs','Risks','CRs','Financials'].map((t,i)=>`<div class="t ${i===0?'active':''}" onclick="showProjTab(this,'${t}')">${t}</div>`).join('')}
+    </div>
+    <div id="projTabBody"></div>
+  `;
+  window._projData = data;
+  showProjTab(document.querySelector('#projTabs .t'), 'Overview');
+}
+function showProjTab(el, tab){
+  document.querySelectorAll('#projTabs .t').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  const data = window._projData;
+  const body = document.getElementById('projTabBody');
+  const p = data.project;
+  if(tab==='Overview'){
+    body.innerHTML = `<div class="grid grid-2">
+      <div class="card"><div class="section-title">Project Info</div>
+        ${['project_id','project_name','pm','account_manager','project_type','business_unit','technology','start_date','end_date'].map(k=>`
+        <div class="widget-item"><span>${k.replace(/_/g,' ')}</span><span class="t">${esc(p[k])}</span></div>`).join('')}
+      </div>
+      <div class="card"><div class="section-title">Financials</div>
+        ${data.financial ? Object.entries(data.financial).filter(([k])=>k!=='_row').map(([k,v])=>`
+        <div class="widget-item"><span>${esc(k)}</span><span class="t">${esc(v)}</span></div>`).join('') : '<div class="empty-state">No financial data</div>'}
+      </div>
+      <div class="card full" style="grid-column:1/-1;"><div class="section-title">Description</div><p style="color:var(--muted);">${esc(p.description)||'No description.'}</p></div>
+    </div>`;
+  } else if(tab==='Tasks' || tab==='Bugs'){
+    const items = tab==='Tasks' ? data.tasks : data.bugs;
+    body.innerHTML = simpleItemTable(items);
+  } else if(tab==='Risks'){
+    body.innerHTML = simpleItemTable(data.risks, true);
+  } else if(tab==='CRs'){
+    body.innerHTML = simpleItemTable(data.change_requests);
+  } else if(tab==='Financials'){
+    body.innerHTML = data.financial ? `<div class="card">${Object.entries(data.financial).filter(([k])=>k!=='_row').map(([k,v])=>`
+      <div class="widget-item"><span>${esc(k)}</span><span class="t">${esc(v)}</span></div>`).join('')}</div>` : '<div class="empty-state">No financial row found for this project</div>';
+  }
+}
+function simpleItemTable(items, showRisk=false){
+  if(!items.length) return '<div class="empty-state">Nothing here yet</div>';
+  return `<div class="table-wrap"><table><thead><tr><th>ID</th><th>Summary</th><th>Assigned To</th><th>Priority</th><th>Status</th>${showRisk?'<th>Risk Score</th>':''}<th>Effort</th></tr></thead>
+  <tbody>${items.map(i=>`<tr><td>${esc(i.id)}</td><td>${esc(i.summary)}</td><td>${esc(i.assigned_to)}</td><td>${priorityBadge(i.priority)}</td><td>${statusBadge(i.status)}</td>
+  ${showRisk?`<td>${(i.probability||0)*(i.impact||0)}</td>`:''}<td>${fmtNum(i.actual_effort)}/${fmtNum(i.original_effort)}h</td></tr>`).join('')}</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// RESOURCES
+// ---------------------------------------------------------------------------
+let resourcesQuery = {q:'', role:'', department:''};
+async function renderResources(){
+  const el = document.getElementById('content');
+  el.innerHTML = `
+    <div class="actions-row"><h2 class="page-title">Resources</h2><button class="btn btn-primary" onclick="openResourceModal()">+ Add Resource</button></div>
+    <div class="table-wrap">
+      <div class="table-toolbar"><input id="rf-q" placeholder="Search resources…" value="${esc(resourcesQuery.q)}"><button class="btn btn-sm" onclick="applyResourceFilters()">Apply</button></div>
+      <div id="resourcesTableBody">${tableSkeleton()}</div>
+    </div>`;
+  document.getElementById('rf-q').onkeydown = e => { if(e.key==='Enter') applyResourceFilters(); };
+  await loadResourcesTable();
+}
+function applyResourceFilters(){ resourcesQuery.q = document.getElementById('rf-q').value; loadResourcesTable(); }
+async function loadResourcesTable(){
+  const params = new URLSearchParams({q:resourcesQuery.q});
+  const data = await api('/resources?' + params.toString());
+  document.getElementById('resourcesTableBody').innerHTML = `
+    <table><thead><tr><th>Employee</th><th>Role</th><th>Type</th><th>Manager</th><th>Level</th><th>Onsite/Offshore</th><th>Availability</th><th>Actions</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(r=>`
+      <tr><td>${esc(r.employee)}</td><td>${esc(r.role)}</td><td>${esc(r.resource_type)}</td><td>${esc(r.manager)}</td>
+      <td>${esc(r.level)}</td><td>${esc(r.onsite_offshore)}</td><td>${r.availability?r.availability+'%':'—'}</td>
+      <td><div class="row-actions">
+        <button title="Edit" onclick='openResourceModal(${JSON.stringify(r)})'>✎</button>
+        <button title="Delete" onclick="deleteResource('${esc(r.employee)}')">🗑</button>
+      </div></td></tr>`).join('') : `<tr><td colspan="8" class="empty-state">No resources found</td></tr>`}
+    </tbody></table>`;
+}
+function openResourceModal(r=null){
+  const isEdit = !!r; r = r || {};
+  openModal(`
+    <h3>${isEdit?'Edit Resource':'Add Resource'}</h3>
+    <div class="form-grid">
+      <div class="form-row full"><label>Employee Name *</label><input id="rf-name" value="${esc(r.employee)}" ${isEdit?'readonly':''}></div>
+      <div class="form-row"><label>Role</label><input id="rf-role" value="${esc(r.role)}"></div>
+      <div class="form-row"><label>Resource Type / Dept</label><input id="rf-type" value="${esc(r.resource_type)}"></div>
+      <div class="form-row"><label>Manager</label><input id="rf-manager" value="${esc(r.manager)}"></div>
+      <div class="form-row"><label>Level (1=senior)</label><input type="number" id="rf-level" value="${esc(r.level)||4}" min="1" max="5"></div>
+      <div class="form-row"><label>Email</label><input id="rf-email" value="${esc(r.email)}"></div>
+      <div class="form-row"><label>Designation</label><input id="rf-designation" value="${esc(r.designation)}"></div>
+      <div class="form-row"><label>Availability %</label><input type="number" id="rf-avail" value="${esc(r.availability)||100}"></div>
+      <div class="form-row"><label>Billing Rate ($/hr)</label><input type="number" id="rf-rate" value="${esc(r.billing_rate)}"></div>
+      <div class="form-row"><label>Joining Date</label><input type="date" id="rf-join" value="${esc(r.joining_date)}"></div>
+      <div class="form-row"><label>Experience (yrs)</label><input type="number" id="rf-exp" value="${esc(r.experience)}"></div>
+      <div class="form-row full"><label>Skills</label><input id="rf-skills" value="${esc(r.skills)}"></div>
+      ${!isEdit?'<div class="form-row full"><label><input type="checkbox" id="rf-support" style="width:auto;"> Support team (80hr capacity)</label></div>':''}
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveResource(${isEdit?`'${esc(r.employee)}'`:'null'})">Save</button>
+    </div>`);
+}
+async function saveResource(employee){
+  const payload = {
+    employee: document.getElementById('rf-name').value, role: document.getElementById('rf-role').value,
+    resource_type: document.getElementById('rf-type').value, manager: document.getElementById('rf-manager').value,
+    level: document.getElementById('rf-level').value, email: document.getElementById('rf-email').value,
+    designation: document.getElementById('rf-designation').value, availability: document.getElementById('rf-avail').value,
+    billing_rate: document.getElementById('rf-rate').value, joining_date: document.getElementById('rf-join').value,
+    experience: document.getElementById('rf-exp').value, skills: document.getElementById('rf-skills').value,
+  };
+  if(!employee){ payload.is_support_team = document.getElementById('rf-support').checked; }
+  try{
+    if(employee){ await api(`/resources/${encodeURIComponent(employee)}`, {method:'PUT', body:payload}); toast('Resource updated', 'success'); }
+    else { await api('/resources', {method:'POST', body:payload}); toast('Resource added', 'success'); }
+    closeModal(); loadResourcesTable();
+  }catch(e){ toast(e.message, 'error'); }
+}
+function deleteResource(employee){
+  confirmDialog('Delete Resource', `Remove ${employee} from Resources?`, async () => {
+    try{ await api(`/resources/${encodeURIComponent(employee)}`, {method:'DELETE'}); toast('Resource removed', 'success'); loadResourcesTable(); }
+    catch(e){ toast(e.message, 'error'); }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// WORK ITEMS (unified Task/Bug/Risk/CR)
+// ---------------------------------------------------------------------------
+let wiQuery = {page:1, page_size:15, sort:'', order:'asc', q:'', type:'', status:'', priority:''};
+async function renderWorkItems(forcedType=null){
+  if(forcedType) wiQuery.type = forcedType;
+  const el = document.getElementById('content');
+  el.innerHTML = `
+    <div class="actions-row"><h2 class="page-title">Work Items</h2><button class="btn btn-primary" onclick="openWorkItemModal()">+ New Work Item</button></div>
+    <div class="table-wrap">
+      <div class="table-toolbar">
+        <input id="wf-q" placeholder="Search…" value="${esc(wiQuery.q)}">
+        <select id="wf-type"><option value="">All Types</option>${['Task','Bug','Risk','CR'].map(x=>`<option ${wiQuery.type===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="wf-status"><option value="">All Status</option>${['To Do','In Progress','Completed','Blocked','Open','Fixed'].map(x=>`<option ${wiQuery.status===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="wf-priority"><option value="">All Priority</option>${['P1','P2','P3'].map(x=>`<option ${wiQuery.priority===x?'selected':''}>${x}</option>`).join('')}</select>
+        <button class="btn btn-sm" onclick="applyWiFilters()">Apply</button>
+      </div>
+      <div id="wiTableBody">${tableSkeleton()}</div>
+    </div>`;
+  document.getElementById('wf-q').onkeydown = e => { if(e.key==='Enter') applyWiFilters(); };
+  await loadWiTable();
+}
+function applyWiFilters(){
+  wiQuery.q = document.getElementById('wf-q').value; wiQuery.type = document.getElementById('wf-type').value;
+  wiQuery.status = document.getElementById('wf-status').value; wiQuery.priority = document.getElementById('wf-priority').value;
+  wiQuery.page = 1; loadWiTable();
+}
+function sortWi(col){ wiQuery.order = (wiQuery.sort===col && wiQuery.order==='asc')?'desc':'asc'; wiQuery.sort = col; loadWiTable(); }
+async function loadWiTable(){
+  const q = wiQuery;
+  const params = new URLSearchParams({page:q.page, page_size:q.page_size, sort:q.sort, order:q.order, q:q.q, type:q.type, status:q.status, priority:q.priority});
+  const data = await api('/workitems?' + params.toString());
+  const cols = [['id','ID'],['type','Type'],['summary','Summary'],['module','Project'],['assigned_to','Owner'],['priority','Priority'],['status','Status'],['end_date','Due']];
+  document.getElementById('wiTableBody').innerHTML = `
+    <table><thead><tr>${cols.map(([k,l])=>`<th onclick="sortWi('${k}')">${l}</th>`).join('')}<th>Actions</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(i=>`
+      <tr><td>${esc(i.id)}</td><td><span class="badge badge-gray">${esc(i.type)}</span></td><td>${esc(i.summary)}</td>
+      <td>${esc(i.module)}</td><td>${esc(i.assigned_to)}</td><td>${priorityBadge(i.priority)}</td><td>${statusBadge(i.status)}</td><td>${esc(i.end_date)}</td>
+      <td><div class="row-actions">
+        <button title="Edit" onclick='openWorkItemModal(null, ${JSON.stringify(i)})'>✎</button>
+        <button title="Delete" onclick="deleteWorkItem('${esc(i.id)}')">🗑</button>
+      </div></td></tr>`).join('') : `<tr><td colspan="9" class="empty-state">No work items match these filters</td></tr>`}
+    </tbody></table>
+    <div class="pagination"><span>${data.total} item${data.total===1?'':'s'} total</span>
+      <div><button ${q.page<=1?'disabled':''} onclick="wiQuery.page--;loadWiTable()">‹ Prev</button>
+      <span style="margin:0 8px;">Page ${q.page}</span>
+      <button ${q.page*q.page_size>=data.total?'disabled':''} onclick="wiQuery.page++;loadWiTable()">Next ›</button></div>
+    </div>`;
+}
+async function openWorkItemModal(defaultType=null, item=null){
+  if(!state.lookups) state.lookups = await api('/lookups');
+  const L = state.lookups;
+  const isEdit = !!item; item = item || {type: defaultType || 'Task'};
+  openModal(`
+    <h3>${isEdit?'Edit Work Item':'New Work Item'}</h3>
+    <div class="form-grid">
+      <div class="form-row"><label>Type *</label>
+        <select id="w-type" onchange="toggleWiExtra()">${['Task','Bug','Risk','CR'].map(x=>`<option value="${x}" ${item.type===x?'selected':''}>${x==='CR'?'Change Request':x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Project *</label>
+        <select id="w-module">${L.projects.map(p=>`<option ${item.module===p.name?'selected':''}>${p.name}</option>`).join('')}</select></div>
+      <div class="form-row full"><label>Summary *</label><input id="w-summary" value="${esc(item.summary)}"></div>
+      <div class="form-row full"><label>Description</label><textarea id="w-desc">${esc(item.description)}</textarea></div>
+      <div class="form-row"><label>Assigned To *</label>
+        <select id="w-assigned">${L.resources.map(r=>`<option ${item.assigned_to===r.employee?'selected':''}>${r.employee}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Priority</label>
+        <select id="w-priority">${(L.priorities.length?L.priorities:['P1','P2','P3']).map(x=>`<option ${item.priority===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Status</label>
+        <select id="w-status">${(L.statuses.length?L.statuses:['To Do','In Progress','Completed']).map(x=>`<option ${item.status===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Sub-Module</label><input id="w-submodule" value="${esc(item.submodule)}"></div>
+      <div class="form-row"><label>Start Date</label><input type="date" id="w-start" value="${esc(item.start_date)}"></div>
+      <div class="form-row"><label>Due / End Date</label><input type="date" id="w-end" value="${esc(item.end_date)}"></div>
+      <div class="form-row"><label>Original Effort (hrs)</label><input type="number" id="w-orig" value="${esc(item.original_effort)}"></div>
+      <div class="form-row"><label>Actual Effort (hrs)</label><input type="number" id="w-actual" value="${esc(item.actual_effort)}"></div>
+      <div class="form-row"><label>Story Points</label><input type="number" id="w-sp" value="${esc(item.story_points)}"></div>
+      <div class="form-row full"><label>Remarks</label><input id="w-remarks" value="${esc(item.remarks)}"></div>
+    </div>
+    <div id="w-extra"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveWorkItem(${isEdit?`'${esc(item.id)}'`:'null'})">Save</button>
+    </div>`);
+  window._wiEditData = item;
+  toggleWiExtra();
+}
+function toggleWiExtra(){
+  const type = document.getElementById('w-type').value;
+  const item = window._wiEditData || {};
+  const extra = document.getElementById('w-extra');
+  if(type==='Risk'){
+    extra.innerHTML = `<div class="card" style="margin-top:12px;background:var(--accent-light);border:none;">
+      <div class="section-title">Risk Details</div>
+      <div class="form-grid">
+        <div class="form-row"><label>Probability (1-5)</label><input type="number" id="w-prob" min="1" max="5" value="${esc(item.probability)||3}"></div>
+        <div class="form-row"><label>Impact (1-5)</label><input type="number" id="w-impact" min="1" max="5" value="${esc(item.impact)||3}"></div>
+        <div class="form-row"><label>Mitigation Hrs</label><input type="number" id="w-mitigation" value="${esc(item.mitigation_hrs)}"></div>
+      </div></div>`;
+  } else { extra.innerHTML = ''; }
+}
+async function saveWorkItem(id){
+  const payload = {
+    type: document.getElementById('w-type').value, module: document.getElementById('w-module').value,
+    summary: document.getElementById('w-summary').value, description: document.getElementById('w-desc').value,
+    assigned_to: document.getElementById('w-assigned').value, priority: document.getElementById('w-priority').value,
+    status: document.getElementById('w-status').value, submodule: document.getElementById('w-submodule').value,
+    start_date: document.getElementById('w-start').value, end_date: document.getElementById('w-end').value,
+    original_effort: document.getElementById('w-orig').value, actual_effort: document.getElementById('w-actual').value,
+    story_points: document.getElementById('w-sp').value, remarks: document.getElementById('w-remarks').value,
+  };
+  if(payload.type==='Risk'){
+    payload.probability = document.getElementById('w-prob').value;
+    payload.impact = document.getElementById('w-impact').value;
+    payload.mitigation_hrs = document.getElementById('w-mitigation').value;
+  }
+  try{
+    if(id){ await api(`/workitems/${id}`, {method:'PUT', body:payload}); toast('Work item updated', 'success'); }
+    else { await api('/workitems', {method:'POST', body:payload}); toast('Work item created', 'success'); }
+    closeModal(); loadWiTable();
+  }catch(e){ toast(e.message, 'error'); }
+}
+function deleteWorkItem(id){
+  confirmDialog('Delete Work Item', `Delete ${id}? This cannot be undone.`, async () => {
+    try{ await api(`/workitems/${id}`, {method:'DELETE'}); toast('Deleted', 'success'); loadWiTable(); }
+    catch(e){ toast(e.message, 'error'); }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// RISKS / CHANGE REQUESTS (read-only filtered views)
+// ---------------------------------------------------------------------------
+async function renderRisks(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Risks</h2><button class="btn btn-primary" onclick="openWorkItemModal('Risk')">+ Raise Risk</button></div><div class="table-wrap"><div id="risksBody">${tableSkeleton()}</div></div>`;
+  const data = await api('/risks?page_size=200');
+  document.getElementById('risksBody').innerHTML = `
+    <table><thead><tr><th>Risk ID</th><th>Project</th><th>Title</th><th>Probability</th><th>Impact</th><th>Score</th><th>Status</th><th>Target Date</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(r=>{
+      const score = (r.probability && r.impact) ? r.probability*r.impact : (r.legacy_risk_score||0);
+      return `<tr><td>${esc(r.id)}</td><td>${esc(r.module)}</td><td>${esc(r.summary)}</td><td>${esc(r.probability)||'—'}</td><td>${esc(r.impact)||'—'}</td>
+      <td>${priorityBadge(score >= 15 ? 'High' : score >= 5 ? 'Medium' : 'Low')} ${score}</td>
+      <td>${statusBadge(r.status)}</td><td>${esc(r.end_date)}</td></tr>`;
+    }).join('') : `<tr><td colspan="8" class="empty-state">No risks logged</td></tr>`}
+    </tbody></table>`;
+}
+async function renderChangeRequests(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="actions-row"><h2 class="page-title">Change Requests</h2><button class="btn btn-primary" onclick="openWorkItemModal('CR')">+ Raise CR</button></div><div class="table-wrap"><div id="crBody">${tableSkeleton()}</div></div>`;
+  const data = await api('/change-requests?page_size=200');
+  document.getElementById('crBody').innerHTML = `
+    <table><thead><tr><th>CR ID</th><th>Project</th><th>Description</th><th>Priority</th><th>Status</th><th>CR Date</th><th>Target Date</th><th>Planned Hrs</th><th>Actual Hrs</th></tr></thead>
+    <tbody>${data.items.length ? data.items.map(c=>`
+      <tr><td>${esc(c.id)}</td><td>${esc(c.module)}</td><td>${esc(c.summary)}</td><td>${priorityBadge(c.priority)}</td>
+      <td>${statusBadge(c.status)}</td><td>${esc(c.worked_date)}</td><td>${esc(c.end_date)}</td><td>${fmtNum(c.original_effort)}</td><td>${fmtNum(c.actual_effort)}</td></tr>`).join('') : `<tr><td colspan="9" class="empty-state">No change requests logged</td></tr>`}
+    </tbody></table>`;
+}
+
+// ---------------------------------------------------------------------------
+// FINANCIAL / BILLING
+// ---------------------------------------------------------------------------
+async function renderFinancial(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<h2 class="page-title">Financial</h2><div class="table-wrap"><div id="finBody">${tableSkeleton()}</div></div>`;
+  const data = await api('/financial');
+  if(!data.items.length){ document.getElementById('finBody').innerHTML = '<div class="empty-state">No financial data</div>'; return; }
+  const keys = Object.keys(data.items[0]).filter(k=>k!=='_row');
+  document.getElementById('finBody').innerHTML = `
+    <table><thead><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead>
+    <tbody>${data.items.map(r=>`<tr>${keys.map(k=>`<td>${fmtNum(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+async function renderBilling(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<h2 class="page-title">Billing Milestones</h2><div class="table-wrap"><div id="billBody">${tableSkeleton()}</div></div>`;
+  const data = await api('/billing');
+  if(!data.items.length){ document.getElementById('billBody').innerHTML = '<div class="empty-state">No billing data</div>'; return; }
+  const keys = Object.keys(data.items[0]).filter(k=>k!=='_row');
+  document.getElementById('billBody').innerHTML = `
+    <table><thead><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join('')}</tr></thead>
+    <tbody>${data.items.map(r=>`<tr>${keys.map(k=>`<td>${fmtNum(r[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+// ---------------------------------------------------------------------------
+// REPORTS
+// ---------------------------------------------------------------------------
+function renderReports(){
+  const el = document.getElementById('content');
+  const reports = [['project','Project Report'],['risk','Risk Report'],['financial','Financial Report'],['resource','Resource Report'],['task','Task Report']];
+  el.innerHTML = `<h2 class="page-title">Reports</h2>
+    <div class="grid grid-3">${reports.map(([id,label])=>`
+      <div class="card"><div class="section-title">${label}</div>
+      <p style="color:var(--muted);font-size:13px;">Download the latest ${label.toLowerCase()} as an Excel file.</p>
+      <button class="btn btn-primary" onclick="window.location.href='/api/reports/${id}'">⭳ Download</button></div>`).join('')}
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// SETTINGS
+// ---------------------------------------------------------------------------
+async function renderSettings(){
+  const el = document.getElementById('content');
+  el.innerHTML = `<h2 class="page-title">Settings</h2><div class="card">${tableSkeleton()}</div>`;
+  const s = await api('/settings');
+  el.innerHTML = `
+    <h2 class="page-title">Settings</h2>
+    <div class="grid grid-2">
+      <div class="card"><div class="section-title">Workbook Information</div>
+        <div class="widget-item"><span>File</span><span class="t">${esc(s.workbook_path.split('/').pop())}</span></div>
+        <div class="widget-item"><span>Size</span><span class="t">${s.size_kb} KB</span></div>
+        <div class="widget-item"><span>Last Modified</span><span class="t">${new Date(s.last_modified).toLocaleString()}</span></div>
+        <div class="widget-item"><span>Sheets</span><span class="t">${s.sheets.length}</span></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <button class="btn" onclick="refreshAll()">⟳ Reload Workbook</button>
+          <button class="btn" onclick="window.location.href='/api/export'">⭳ Download Workbook</button>
+        </div>
+      </div>
+      <div class="card"><div class="section-title">Appearance</div>
+        <button class="btn" onclick="toggleTheme()">🌓 Toggle Light / Dark Mode</button>
+        <div style="margin-top:16px;" class="section-title">Keyboard Shortcuts</div>
+        <div class="widget-item"><span>Global Search</span><span class="t"><kbd>Ctrl</kbd>+<kbd>K</kbd></span></div>
+        <div class="widget-item"><span>Close modal</span><span class="t"><kbd>Esc</kbd></span></div>
+      </div>
+      <div class="card"><div class="section-title">About</div>
+        <p style="color:var(--muted);font-size:13px;">OrbitFlow is a full project-management web app backed entirely by your Excel workbook — every action reads and writes the same file, no separate database.</p>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// global search
+// ---------------------------------------------------------------------------
+let searchTimeout;
+document.getElementById('globalSearch').addEventListener('input', e => {
+  clearTimeout(searchTimeout);
+  const q = e.target.value;
+  const box = document.getElementById('searchResults');
+  if(!q){ box.classList.remove('show'); return; }
+  searchTimeout = setTimeout(async () => {
+    const data = await api('/search?q=' + encodeURIComponent(q));
+    const groups = [
+      ['Projects', data.projects, p=>`${p.project_name} (${p.project_id})`, p=>viewProject(p.project_id)],
+      ['Resources', data.resources, r=>r.employee, r=>navigate('resources')],
+      ['Work Items', data.workitems, i=>`${i.id} — ${i.summary}`, i=>navigate('workitems')],
+    ];
+    let html = '';
+    groups.forEach(([label, items, fmt, onClick]) => {
+      if(items.length){
+        html += `<div class="search-group-label">${label}</div>`;
+        items.forEach((item, idx) => {
+          html += `<div class="search-result-item" id="sr-${label}-${idx}">${esc(fmt(item))}</div>`;
+        });
+      }
+    });
+    box.innerHTML = html || '<div class="search-result-item">No results</div>';
+    box.classList.add('show');
+    groups.forEach(([label, items, fmt, onClick]) => {
+      items.forEach((item, idx) => {
+        const node = document.getElementById(`sr-${label}-${idx}`);
+        if(node) node.onclick = () => { onClick(item); box.classList.remove('show'); document.getElementById('globalSearch').value=''; };
+      });
+    });
+  }, 250);
+});
+document.addEventListener('click', e => {
+  if(!e.target.closest('.search-box')) document.getElementById('searchResults').classList.remove('show');
+});
+document.addEventListener('keydown', e => {
+  if((e.ctrlKey||e.metaKey) && e.key==='k'){ e.preventDefault(); document.getElementById('globalSearch').focus(); }
+  if(e.key==='Escape'){ closeModal(); document.getElementById('confirmOverlay').classList.remove('show'); }
+});
+
+// ---------------------------------------------------------------------------
+// router
+// ---------------------------------------------------------------------------
+async function render(){
+  try{
+    if(state.route==='dashboard') await renderDashboard();
+    else if(state.route==='projects') await renderProjects();
+    else if(state.route==='resources') await renderResources();
+    else if(state.route==='workitems') await renderWorkItems();
+    else if(state.route==='risks') await renderRisks();
+    else if(state.route==='changerequests') await renderChangeRequests();
+    else if(state.route==='financial') await renderFinancial();
+    else if(state.route==='billing') await renderBilling();
+    else if(state.route==='reports') renderReports();
+    else if(state.route==='settings') await renderSettings();
+  }catch(e){
+    document.getElementById('content').innerHTML = `<div class="empty-state">⚠ ${esc(e.message)}</div>`;
+    toast(e.message, 'error');
+  }
+}
+
+renderNav();
+navigate('dashboard');
+</script>
+</body>
+</html>
